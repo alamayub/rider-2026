@@ -1,33 +1,51 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
-function DataTable({ title, rows, searchableKeys = [] }) {
+function DataTable({
+  title,
+  rows,
+  searchableKeys = [],
+  pageSize: pageSizeProp = 8,
+  hideSearch = false,
+  externalQuery = '',
+  renderActions,
+  getRowKey,
+}) {
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(1)
-  const pageSize = 8
+  const pageSize = pageSizeProp
+
+  const effectiveQuery = hideSearch ? externalQuery : query
 
   const filtered = useMemo(() => {
-    const normalized = query.trim().toLowerCase()
+    const normalized = effectiveQuery.trim().toLowerCase()
     if (!normalized) return rows || []
     return (rows || []).filter((row) =>
       searchableKeys.some((k) => String(row?.[k] ?? '').toLowerCase().includes(normalized)),
     )
-  }, [query, rows, searchableKeys])
+  }, [effectiveQuery, rows, searchableKeys])
+
+  useEffect(() => {
+    if (hideSearch) setPage(1)
+  }, [hideSearch, externalQuery])
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(Math.max(1, page), pageCount)
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
   const columns = pageRows.length ? Object.keys(pageRows[0]) : rows?.length ? Object.keys(rows[0]) : []
+  const tableColCount = columns.length + (renderActions ? 1 : 0)
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h3 className="font-semibold text-slate-900">{title}</h3>
-        <input
-          className="w-64 rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
-          placeholder="Search..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        {!hideSearch ? (
+          <input
+            className="w-64 rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+            placeholder="Search..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        ) : null}
       </div>
       <div className="overflow-auto rounded border border-slate-200">
         <table className="min-w-full text-left text-xs">
@@ -38,21 +56,25 @@ function DataTable({ title, rows, searchableKeys = [] }) {
                   {c}
                 </th>
               ))}
+              {renderActions ? (
+                <th className="px-2 py-2 font-medium text-right whitespace-nowrap">Actions</th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
             {pageRows.map((row, i) => (
-              <tr key={i} className="border-t border-slate-100">
+              <tr key={getRowKey ? getRowKey(row, i) : String(row.id ?? i)} className="border-t border-slate-100">
                 {columns.map((c) => (
                   <td key={c} className="max-w-52 truncate px-2 py-2 text-slate-700">
                     {typeof row[c] === 'object' ? JSON.stringify(row[c]) : String(row[c] ?? '')}
                   </td>
                 ))}
+                {renderActions ? <td className="whitespace-nowrap px-2 py-2 text-right align-middle">{renderActions(row)}</td> : null}
               </tr>
             ))}
             {!pageRows.length && (
               <tr>
-                <td className="px-2 py-3 text-slate-500" colSpan={Math.max(1, columns.length)}>
+                <td className="px-2 py-3 text-slate-500" colSpan={Math.max(1, tableColCount)}>
                   No data
                 </td>
               </tr>

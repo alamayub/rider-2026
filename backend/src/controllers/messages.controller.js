@@ -1,4 +1,24 @@
-import { listConversationMessages, listMyConversations, sendMessage, startConversation } from '../services/messages.service.js';
+import {
+  ensureRiderSupportConversation,
+  listConversationMessages,
+  listMyConversations,
+  sendMessage,
+  startConversation
+} from '../services/messages.service.js';
+
+export async function ensureRiderSupportConversationController(req, res) {
+  try {
+    if (req.user.role !== 'rider') {
+      return res.status(403).json({ error: 'Support endpoint is for riders only' });
+    }
+    const conversation = await ensureRiderSupportConversation({ riderUserId: req.user.sub });
+    return res.status(200).json(conversation);
+  } catch (error) {
+    const msg = error?.message || 'Unable to open support';
+    const status = msg.includes('only available') || msg.includes('for riders') ? 403 : msg.includes('No support') ? 503 : 400;
+    return res.status(status).json({ error: msg });
+  }
+}
 
 export async function startConversationController(req, res) {
   try {

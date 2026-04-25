@@ -139,6 +139,13 @@ class RiderApi {
         'participantUserId': participantUserId,
         if (rideId != null && rideId.isNotEmpty) 'rideId': rideId,
       });
+
+  /// Opens or resumes the rider ↔ admin support thread (primary active admin).
+  Future<Map<String, dynamic>> ensureSupportConversation() async {
+    final response = await _dio.post('/messages/support/conversation');
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   Future<List<dynamic>> listMessages(String conversationId) => _list('/messages/conversations/$conversationId/messages');
   Future<Map<String, dynamic>> sendMessage(String conversationId, String content) =>
       _map('/messages/conversations/$conversationId/messages', <String, dynamic>{'content': content});

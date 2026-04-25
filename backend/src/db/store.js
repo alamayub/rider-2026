@@ -4,6 +4,9 @@ import { fileURLToPath } from 'url';
 import mysql from 'mysql2/promise';
 import cityConfigs from '../config/cities.json' with { type: 'json' };
 import { env } from '../config/env.js';
+import { hashPassword } from '../utils/password.js';
+import { logger } from '../utils/logger.js';
+import { normalizeUserPhone } from '../utils/phone.js';
 
 function toMySqlDateTime(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -393,6 +396,33 @@ async function migrateMySql() {
       );
     }
   }
+
+  const [existingUsers] = await pool.query('SELECT COUNT(*) AS count FROM users');
+  const userCount = Number(existingUsers[0].count);
+  const seedFlag = String(process.env.SEED_DEV_USERS || '').toLowerCase();
+  const allowSeed =
+    userCount === 0 &&
+    seedFlag !== '0' &&
+    seedFlag !== 'false' &&
+    (env.nodeEnv === 'development' || process.env.SEED_DEV_USERS === '1');
+  if (allowSeed) {
+    const plain = process.env.SEED_DEV_PASSWORD || 'Pass@123';
+    const passwordHash = hashPassword(plain);
+    const devAccounts = [
+      { phone: '9800000000', email: 'admin@localhost', role: 'admin' },
+      { phone: '9800000001', email: 'rider@localhost', role: 'rider' },
+      { phone: '9800000002', email: 'driver@localhost', role: 'driver' },
+    ];
+    for (const row of devAccounts) {
+      await createUser({ phone: row.phone, email: row.email, role: row.role, passwordHash });
+    }
+    logger.info('db_seed_dev_users', {
+      message: 'Seeded default admin, rider, and driver (empty users table).',
+      phones: devAccounts.map((a) => `${a.role}:${a.phone}`),
+      hint: 'Use SEED_DEV_PASSWORD to override the default password; set SEED_DEV_USERS=0 to skip.',
+    });
+  }
+
   await refreshPlatformCounters();
 }
 
@@ -423,27 +453,52 @@ export async function closeDb() {
 }
 
 export async function findUserByPhoneRole(phone, role) {
+  const key = normalizeUserPhone(phone);
+  const raw = String(phone ?? '').trim();
+  const variants = [...new Set([key, raw].filter(Boolean))];
+
   if (env.dbClient === 'memory') {
-    return memory.users.find((u) => u.phone === phone && u.role === role) || null;
+    return (
+      memory.users.find((u) => u.role === role && variants.includes(u.phone)) ||
+      memory.users.find((u) => u.role === role && normalizeUserPhone(u.phone) === key) ||
+      null
+    );
   }
 
-  const [rows] = await pool.query(
-    `SELECT id, phone, email, password_hash AS passwordHash, auth_otp AS authOtp, auth_otp_expires_at AS authOtpExpiresAt,
+  for (const p of variants) {
+    const [rows] = await pool.query(
+      `SELECT id, phone, email, password_hash AS passwordHash, auth_otp AS authOtp, auth_otp_expires_at AS authOtpExpiresAt,
             auth_otp_last_sent_at AS authOtpLastSentAt, auth_otp_window_started_at AS authOtpWindowStartedAt, auth_otp_window_count AS authOtpWindowCount,
             failed_otp_count AS failedOtpCount, otp_locked_until AS otpLockedUntil,
             failed_signin_count AS failedSigninCount, signin_locked_until AS signinLockedUntil,
             role, status, created_at AS createdAt
      FROM users WHERE phone = ? AND role = ? LIMIT 1`,
-    [phone, role]
+      [p, role]
+    );
+    if (rows[0]) return rows[0];
+  }
+
+  const [legacyRows] = await pool.query(
+    `SELECT id, phone, email, password_hash AS passwordHash, auth_otp AS authOtp, auth_otp_expires_at AS authOtpExpiresAt,
+            auth_otp_last_sent_at AS authOtpLastSentAt, auth_otp_window_started_at AS authOtpWindowStartedAt, auth_otp_window_count AS authOtpWindowCount,
+            failed_otp_count AS failedOtpCount, otp_locked_until AS otpLockedUntil,
+            failed_signin_count AS failedSigninCount, signin_locked_until AS signinLockedUntil,
+            role, status, created_at AS createdAt
+     FROM users WHERE role = ? AND phone LIKE '+%'`,
+    [role]
   );
-  return rows[0] || null;
+  return legacyRows.find((row) => normalizeUserPhone(row.phone) === key) || null;
 }
 
 export async function createUser({ phone, email, role, passwordHash = null }) {
+  const phoneNorm = normalizeUserPhone(phone);
+  if (!phoneNorm) {
+    throw new Error('phone is required');
+  }
   const ts = now();
   const user = {
     id: createId(),
-    phone,
+    phone: phoneNorm,
     email: email || null,
     passwordHash,
     authOtp: null,
@@ -1552,9 +1607,16 @@ export async function createPayoutLedgerRecord({ paymentId, driverId, amount, cu
   return payout;
 }
 
-export async function listPayoutLedger({ driverId = null, status = null } = {}) {
+export async function listPayoutLedger({ driverId = null, status = null, limit = null } = {}) {
   if (env.dbClient === 'memory') {
-    return memory.payoutLedger.filter((p) => (!driverId || p.driverId === driverId) && (!status || p.status === status));
+    let list = memory.payoutLedger.filter(
+      (p) => (!driverId || String(p.driverId) === String(driverId)) && (!status || p.status === status),
+    );
+    list = [...list].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    if (limit != null && Number.isFinite(Number(limit)) && Number(limit) > 0) {
+      list = list.slice(0, Math.min(Number(limit), 2000));
+    }
+    return list;
   }
   let sql =
     'SELECT id, payment_id AS paymentId, driver_id AS driverId, amount, currency, status, note, created_at AS createdAt, updated_at AS updatedAt FROM payout_ledger WHERE 1=1';
@@ -1568,6 +1630,10 @@ export async function listPayoutLedger({ driverId = null, status = null } = {}) 
     params.push(status);
   }
   sql += ' ORDER BY created_at DESC';
+  if (limit != null && Number.isFinite(Number(limit)) && Number(limit) > 0) {
+    sql += ' LIMIT ?';
+    params.push(Math.min(Number(limit), 2000));
+  }
   const [rows] = await pool.query(sql, params);
   return rows;
 }
@@ -2225,6 +2291,60 @@ export async function listConversationsForUser(userId) {
      WHERE participant_a_id = ? OR participant_b_id = ?
      ORDER BY updated_at DESC`,
     [userId, userId]
+  );
+  return rows;
+}
+
+export async function findFirstActiveAdminUser() {
+  if (env.dbClient === 'memory') {
+    const admins = memory.users.filter((u) => u.role === 'admin' && u.status === 'active');
+    admins.sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+    return admins[0] || null;
+  }
+  const [rows] = await pool.query(
+    `SELECT id, phone, email, role, status, created_at AS createdAt
+     FROM users
+     WHERE role = 'admin' AND status = 'active'
+     ORDER BY id ASC
+     LIMIT 1`
+  );
+  return rows[0] || null;
+}
+
+/** Conversations for a user with the other participant's id/phone/role (for support inbox UI). */
+export async function listConversationsForUserWithPeers(userId) {
+  if (env.dbClient === 'memory') {
+    const convs = memory.conversations
+      .filter((c) => c.participantAId === userId || c.participantBId === userId)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    return convs.map((c) => {
+      const peerId = c.participantAId === userId ? c.participantBId : c.participantAId;
+      const peer = memory.users.find((u) => u.id === peerId) || null;
+      return {
+        ...c,
+        peerUserId: peerId,
+        peerPhone: peer?.phone ?? null,
+        peerRole: peer?.role ?? null
+      };
+    });
+  }
+
+  const [rows] = await pool.query(
+    `SELECT c.id,
+            c.participant_a_id AS participantAId,
+            c.participant_b_id AS participantBId,
+            c.ride_id AS rideId,
+            c.created_at AS createdAt,
+            c.updated_at AS updatedAt,
+            CASE WHEN c.participant_a_id = ? THEN c.participant_b_id ELSE c.participant_a_id END AS peerUserId,
+            CASE WHEN c.participant_a_id = ? THEN uB.phone ELSE uA.phone END AS peerPhone,
+            CASE WHEN c.participant_a_id = ? THEN uB.role ELSE uA.role END AS peerRole
+     FROM conversations c
+     INNER JOIN users uA ON uA.id = c.participant_a_id
+     INNER JOIN users uB ON uB.id = c.participant_b_id
+     WHERE c.participant_a_id = ? OR c.participant_b_id = ?
+     ORDER BY c.updated_at DESC`,
+    [userId, userId, userId, userId, userId]
   );
   return rows;
 }

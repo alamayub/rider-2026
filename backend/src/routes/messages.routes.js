@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import {
+  ensureRiderSupportConversationController,
   listMessagesController,
   listMyConversationsController,
   sendMessageController,
@@ -10,6 +11,7 @@ import {
 export const messagesRouter = Router();
 messagesRouter.use(requireAuth);
 
+messagesRouter.post('/support/conversation', ensureRiderSupportConversationController);
 messagesRouter.post('/conversations', startConversationController);
 messagesRouter.get('/conversations', listMyConversationsController);
 messagesRouter.get('/conversations/:conversationId/messages', listMessagesController);

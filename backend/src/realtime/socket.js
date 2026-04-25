@@ -5,11 +5,13 @@ import { findConversationById, findUserById, upsertDriverLocation } from '../db/
 import { sendMessage } from '../services/messages.service.js';
 import { logger } from '../utils/logger.js';
 import { consumeAuthRateLimit } from '../services/auth.service.js';
+import { setSocketIoServer } from './socket-io-hub.js';
 
 export function createSocketServer(httpServer, corsOrigin) {
   const io = new Server(httpServer, {
     cors: { origin: corsOrigin }
   });
+  setSocketIoServer(io);
 
   io.use(async (socket, next) => {
     try {
@@ -73,7 +75,6 @@ export function createSocketServer(httpServer, corsOrigin) {
           content
         });
 
-        io.to(`conversation:${conversationId}`).emit('message:new', message);
         if (typeof ack === 'function') ack({ ok: true, message });
       } catch (error) {
         if (typeof ack === 'function') ack({ ok: false, error: error.message });

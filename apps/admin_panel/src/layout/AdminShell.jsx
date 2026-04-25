@@ -201,7 +201,6 @@ function AdminShell() {
               </button>
               <div className="min-w-0">
                 <h1 className="text-lg font-semibold text-slate-900 sm:text-xl">Ride Admin Panel</h1>
-                <p className="truncate text-sm text-slate-500">Web admin for backend ops and moderation</p>
                 <p className="text-xs font-medium text-slate-400">Current section: {activeRoute?.label || 'Dashboard'}</p>
               </div>
             </div>
@@ -272,7 +271,7 @@ function AdminShell() {
                     <p className="text-sm font-medium text-slate-600">No events yet</p>
                     <p className="mx-auto mt-1 max-w-sm text-xs text-slate-500">
                       When the socket is connected, new chat messages will appear here with a short summary. Open the
-                      Messages page and send traffic to see activity.
+                      Support page and send traffic to see activity.
                     </p>
                   </div>
                 ) : (

@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
-import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { env } from '../config/env.js';
+import { hashPassword, verifyPassword } from '../utils/password.js';
+import { normalizeUserPhone } from '../utils/phone.js';
 import {
   clearUserAuthOtp,
   createUser,
@@ -57,23 +58,6 @@ function validatePasswordStrength(password) {
   return hasUpper && hasLower && hasDigit && hasSpecial;
 }
 
-function hashPassword(password, salt = randomBytes(16).toString('hex')) {
-  const derived = scryptSync(String(password), salt, 64).toString('hex');
-  return `scrypt:${salt}:${derived}`;
-}
-
-function verifyPassword(password, storedHash) {
-  if (!storedHash) return false;
-  const parts = String(storedHash).split(':');
-  if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
-  const [, salt, digest] = parts;
-  const candidate = scryptSync(String(password), salt, 64).toString('hex');
-  const digestBuffer = Buffer.from(digest, 'hex');
-  const candidateBuffer = Buffer.from(candidate, 'hex');
-  if (digestBuffer.length !== candidateBuffer.length) return false;
-  return timingSafeEqual(digestBuffer, candidateBuffer);
-}
-
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
@@ -91,7 +75,8 @@ function buildTokens(user) {
 }
 
 export async function requestSignInOtp({ phone, email, role, sourceIp }) {
-  consumeAuthRateLimit({ scope: 'request-otp', identifier: phone, sourceIp });
+  const phoneKey = normalizeUserPhone(phone) || String(phone || '').trim();
+  consumeAuthRateLimit({ scope: 'request-otp', identifier: phoneKey, sourceIp });
   let user = await findUserByPhoneRole(phone, role);
 
   if (!user) {
@@ -141,7 +126,7 @@ export async function registerRiderOrDriver({ phone, email, password, role, sour
   if (r !== 'rider' && r !== 'driver') {
     throw new Error('Registration is only available for rider or driver');
   }
-  const p = String(phone || '').trim();
+  const p = normalizeUserPhone(phone);
   if (!p) {
     throw new Error('phone is required');
   }
@@ -175,7 +160,8 @@ export async function registerRiderOrDriver({ phone, email, password, role, sour
 }
 
 export async function signIn({ phone, email, role, password, otp, sourceIp }) {
-  consumeAuthRateLimit({ scope: 'signin', identifier: phone, sourceIp });
+  const phoneKey = normalizeUserPhone(phone) || String(phone || '').trim();
+  consumeAuthRateLimit({ scope: 'signin', identifier: phoneKey, sourceIp });
   if (!password && !otp) {
     throw new Error('password or otp is required');
   }

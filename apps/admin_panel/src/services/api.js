@@ -24,7 +24,7 @@ const baseQuery = async (args, api, extraOptions) => {
 export const api = createApi({
   reducerPath: 'api',
   baseQuery,
-  tagTypes: ['Notifications', 'NotificationStats', 'GlobalNotificationStats'],
+  tagTypes: ['Notifications', 'NotificationStats', 'GlobalNotificationStats', 'Conversations', 'Messages'],
   endpoints: (builder) => ({
     health: builder.query({
       query: () => '/health',
@@ -68,6 +68,16 @@ export const api = createApi({
     }),
     reconciliation: builder.query({
       query: () => '/payments/admin/reconciliation',
+    }),
+    payoutLedger: builder.query({
+      query: ({ driverId, status, limit } = {}) => {
+        const q = new URLSearchParams()
+        if (driverId) q.set('driverId', driverId)
+        if (status) q.set('status', status)
+        if (limit != null && limit !== '') q.set('limit', String(limit))
+        const qs = q.toString()
+        return `/payments/admin/payout-ledger${qs ? `?${qs}` : ''}`
+      },
     }),
     paymentMethodsGrouped: builder.query({
       query: (app = 'admin') => `/payments/methods/grouped?app=${encodeURIComponent(app)}&country=np&currency=NPR`,
@@ -131,9 +141,11 @@ export const api = createApi({
     }),
     conversations: builder.query({
       query: () => '/messages/conversations',
+      providesTags: [{ type: 'Conversations', id: 'LIST' }],
     }),
     messages: builder.query({
       query: (conversationId) => `/messages/conversations/${conversationId}/messages`,
+      providesTags: (_result, _err, conversationId) => [{ type: 'Messages', id: String(conversationId) }],
     }),
     sendMessage: builder.mutation({
       query: ({ conversationId, content }) => ({
@@ -141,6 +153,10 @@ export const api = createApi({
         method: 'POST',
         body: { content },
       }),
+      invalidatesTags: (_result, _err, { conversationId }) => [
+        { type: 'Messages', id: String(conversationId) },
+        { type: 'Conversations', id: 'LIST' },
+      ],
     }),
   }),
 })
@@ -157,6 +173,7 @@ export const {
   useUserAccountActionsQuery,
   useDriverKycQuery,
   useReconciliationQuery,
+  usePayoutLedgerQuery,
   usePaymentMethodsGroupedQuery,
   useMyNotificationsQuery,
   useMyNotificationStatsQuery,

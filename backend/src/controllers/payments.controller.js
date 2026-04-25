@@ -6,6 +6,7 @@ import {
   getPaymentMethodsForApps,
   getPaymentTimeline,
   getPaymentsReconciliation,
+  listAdminPayoutLedger,
   markPaymentStatus,
   processPaymentWebhook
 } from '../services/payments.service.js';
@@ -116,6 +117,19 @@ export async function createPayoutController(req, res) {
 export async function paymentsReconciliationController(req, res) {
   const data = await getPaymentsReconciliation();
   return res.json(data);
+}
+
+export async function payoutLedgerController(req, res) {
+  try {
+    const ledger = await listAdminPayoutLedger({
+      driverId: req.query.driverId,
+      status: req.query.status,
+      limit: req.query.limit
+    });
+    return res.json({ ledger });
+  } catch (error) {
+    return res.status(400).json({ error: error?.message || 'Failed to load payout ledger' });
+  }
 }
 
 export async function paymentMethodsController(req, res) {

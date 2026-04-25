@@ -3,10 +3,12 @@ import {
   createMessageRecord,
   findConversationById,
   findDirectConversation,
+  findFirstActiveAdminUser,
   findUserById,
-  listConversationsForUser,
+  listConversationsForUserWithPeers,
   listMessagesByConversation
 } from '../db/store.js';
+import { emitConversationNewMessage } from '../realtime/socket-io-hub.js';
 
 function canStartConversation(initiatorRole, targetRole) {
   const allowedPairs = new Set(['rider:driver', 'driver:rider', 'rider:admin', 'admin:rider']);
@@ -43,7 +45,25 @@ export async function startConversation({ initiatorUserId, initiatorRole, partic
 }
 
 export async function listMyConversations(userId) {
-  return listConversationsForUser(userId);
+  return listConversationsForUserWithPeers(userId);
+}
+
+/** Rider-only: get or create the direct chat with the primary on-call admin (sorted by user id). */
+export async function ensureRiderSupportConversation({ riderUserId }) {
+  const rider = await findUserById(riderUserId);
+  if (!rider || rider.role !== 'rider') {
+    throw new Error('Support chat is only available for rider accounts');
+  }
+  const admin = await findFirstActiveAdminUser();
+  if (!admin) {
+    throw new Error('No support agent is available yet. Please try again later.');
+  }
+  return startConversation({
+    initiatorUserId: riderUserId,
+    initiatorRole: 'rider',
+    participantUserId: admin.id,
+    rideId: null
+  });
 }
 
 export async function listConversationMessages({ conversationId, userId }) {
@@ -74,10 +94,12 @@ export async function sendMessage({ conversationId, senderUserId, content }) {
     throw new Error('Message content is required');
   }
 
-  return createMessageRecord({
+  const message = await createMessageRecord({
     conversationId,
     senderUserId,
     content: content.trim(),
     actorUserId: senderUserId
   });
+  emitConversationNewMessage(message);
+  return message;
 }

@@ -6,6 +6,7 @@ import {
   createRefundController,
   groupedPaymentMethodsController,
   paymentsReconciliationController,
+  payoutLedgerController,
   paymentMethodsController,
   paymentTimelineController,
   paymentWebhookController,
@@ -24,4 +25,5 @@ paymentsRouter.get('/methods/grouped', requireAuth, groupedPaymentMethodsControl
 paymentsRouter.post('/methods/admin', requireAuth, requireRole('admin'), upsertPaymentMethodController);
 paymentsRouter.post('/:paymentId/payouts', requireAuth, requireRole('admin'), createPayoutController);
 paymentsRouter.get('/admin/reconciliation', requireAuth, requireRole('admin'), paymentsReconciliationController);
+paymentsRouter.get('/admin/payout-ledger', requireAuth, requireRole('admin'), payoutLedgerController);
 paymentsRouter.post('/webhook', paymentWebhookController);

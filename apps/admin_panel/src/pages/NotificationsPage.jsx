@@ -95,7 +95,7 @@ const notificationTypeOptions = [
 function NotificationsPage() {
   const { data: globalStats, isFetching: globalLoading } = useAdminGlobalNotificationStatsQuery()
   const { data: myStats, isFetching: myStatsLoading } = useMyNotificationStatsQuery()
-  const { data: notifications = [], isFetching: listLoading, refetch: refetchList } = useMyNotificationsQuery(200)
+  const { data: notifications = [], isFetching: listLoading } = useMyNotificationsQuery(200)
 
   const [sendTarget, setSendTarget] = useState('all_users')
   const [sendRecipient, setSendRecipient] = useState('')
@@ -243,22 +243,8 @@ function NotificationsPage() {
   })()
 
   return (
+    <>
     <section className="space-y-8">
-      <div>
-        <h2 className="text-lg font-semibold text-slate-900">Notifications</h2>
-        <p className="text-sm text-slate-500">Platform totals, your inbox stats, send pushes, and lifecycle actions (received → delivered → read).</p>
-        <div className="mt-3">
-          <button
-            type="button"
-            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-            onClick={() => setSendDialogOpen(true)}
-          >
-            <FiSend size={16} />
-            Send notification
-          </button>
-        </div>
-      </div>
-
       {/* Stats */}
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="space-y-3">
@@ -611,9 +597,6 @@ function NotificationsPage() {
                 <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700" onClick={() => setSendDialogOpen(false)}>
                   Cancel
                 </button>
-                <button type="button" className="text-sm text-slate-600 underline" onClick={() => void refetchList()}>
-                  Refresh list
-                </button>
               </div>
               {sendError ? <p className="text-sm text-red-600 lg:col-span-2">{sendError}</p> : null}
               {sendSuccess ? <p className="text-sm text-emerald-700 lg:col-span-2">{sendSuccess}</p> : null}
@@ -622,6 +605,19 @@ function NotificationsPage() {
         </div>
       ) : null}
     </section>
+
+    {!sendDialogOpen ? (
+      <button
+        type="button"
+        aria-label="Send notification"
+        title="Send notification"
+        className="fixed bottom-6 right-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-slate-900 text-white shadow-lg shadow-slate-900/25 ring-1 ring-black/10 transition hover:bg-slate-800 hover:shadow-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 sm:bottom-8 sm:right-8"
+        onClick={() => setSendDialogOpen(true)}
+      >
+        <FiSend size={22} aria-hidden />
+      </button>
+    ) : null}
+    </>
   )
 }
 

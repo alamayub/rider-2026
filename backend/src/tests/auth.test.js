@@ -19,6 +19,7 @@ test('register rider creates account and returns tokens', async () => {
   });
   assert.ok(result.user.id);
   assert.equal(result.user.role, 'rider');
+  assert.equal(result.user.phone, '1234567900');
   assert.ok(result.accessToken);
   assert.ok(result.refreshToken);
 });

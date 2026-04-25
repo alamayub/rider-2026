@@ -158,6 +158,16 @@ export async function getPaymentsReconciliation() {
   return { summary, pendingPayouts };
 }
 
+/** Admin-only: full or filtered payout ledger (newest first). */
+export async function listAdminPayoutLedger({ driverId, status, limit } = {}) {
+  const cap = Math.min(Math.max(Number(limit) || 500, 1), 2000);
+  return listPayoutLedger({
+    driverId: driverId ? String(driverId).trim() : null,
+    status: status ? String(status).trim() : null,
+    limit: cap
+  });
+}
+
 export async function markPaymentStatus({ paymentId, status, providerPaymentId, failureCode, failureReason, actorUserId }) {
   const payment = await findPaymentById(paymentId);
   if (!payment) throw new Error('Payment not found');
