@@ -1,0 +1,152 @@
+import 'package:dio/dio.dart';
+
+class RiderApi {
+  RiderApi({required this.baseUrl}) : _dio = Dio(BaseOptions(baseUrl: baseUrl));
+
+  final String baseUrl;
+  final Dio _dio;
+  String? _accessToken;
+
+  set accessToken(String? value) {
+    _accessToken = value;
+  }
+
+  Options get _authOptions => Options(
+        headers: <String, String>{
+          if (_accessToken != null && _accessToken!.isNotEmpty) 'Authorization': 'Bearer $_accessToken',
+        },
+      );
+
+  Future<Map<String, dynamic>> signIn({
+    required String phone,
+    required String password,
+  }) async {
+    final response = await _dio.post(
+      '/auth/signin',
+      data: <String, dynamic>{
+        'phone': phone,
+        'role': 'rider',
+        'password': password,
+      },
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  Future<void> requestOtp({required String phone}) async {
+    await _dio.post(
+      '/auth/request-otp',
+      data: <String, dynamic>{'phone': phone, 'role': 'rider'},
+    );
+  }
+
+  Future<Map<String, dynamic>> getRiderAnalytics() async => _getMap('/analytics/rider');
+
+  Future<List<dynamic>> listVehicleTypes() async => _list('/rides/vehicle-types');
+  Future<Map<String, dynamic>> estimateRideFare(Map<String, dynamic> body) async => _map('/rides/estimate', body);
+  Future<Map<String, dynamic>> createRide(Map<String, dynamic> body) async => _map('/rides', body);
+  Future<List<dynamic>> listMyRides() async => _list('/rides/me');
+  Future<Map<String, dynamic>> updateRideStatus(String rideId, String status, {String? otp}) =>
+      _map('/rides/$rideId/status', <String, dynamic>{'status': status, if (otp != null && otp.isNotEmpty) 'otp': otp});
+
+  Future<Map<String, dynamic>> validateCoupon({
+    required String code,
+    required double fare,
+    String? cityId,
+    String? rideId,
+  }) async =>
+      _map('/coupons/validate', <String, dynamic>{
+        'code': code,
+        'fare': fare,
+        if (cityId != null && cityId.isNotEmpty) 'cityId': cityId,
+        if (rideId != null && rideId.isNotEmpty) 'rideId': rideId,
+      });
+
+  Future<Map<String, dynamic>> applyCoupon({
+    required String code,
+    required String rideId,
+    required double fare,
+  }) async =>
+      _map('/coupons/apply', <String, dynamic>{
+        'code': code,
+        'rideId': rideId,
+        'fare': fare,
+      });
+
+  Future<List<dynamic>> listOffers() async => _list('/offers');
+
+  Future<Map<String, dynamic>> estimateParcelFare(Map<String, dynamic> body) async => _map('/parcels/estimate', body);
+  Future<Map<String, dynamic>> createParcel(Map<String, dynamic> body) async => _map('/parcels', body);
+  Future<List<dynamic>> listMyParcels() async => _list('/parcels/me');
+  Future<Map<String, dynamic>> updateParcelStatus(String parcelId, String status, {String? otp}) =>
+      _map('/parcels/$parcelId/status', <String, dynamic>{'status': status, if (otp != null && otp.isNotEmpty) 'otp': otp});
+
+  Future<List<dynamic>> listPaymentMethods({String app = 'rider'}) =>
+      _list('/payments/methods/list', query: <String, dynamic>{'app': app, 'country': 'np', 'currency': 'NPR'});
+  Future<Map<String, dynamic>> createPaymentIntent(Map<String, dynamic> body) => _map('/payments/intent', body);
+  Future<List<dynamic>> paymentTimeline(String paymentId) => _list('/payments/$paymentId/timeline');
+
+  Future<List<dynamic>> listConversations() async => _list('/messages/conversations');
+  Future<Map<String, dynamic>> startConversation({
+    required String participantUserId,
+    String? rideId,
+  }) =>
+      _map('/messages/conversations', <String, dynamic>{
+        'participantUserId': participantUserId,
+        if (rideId != null && rideId.isNotEmpty) 'rideId': rideId,
+      });
+  Future<List<dynamic>> listMessages(String conversationId) => _list('/messages/conversations/$conversationId/messages');
+  Future<Map<String, dynamic>> sendMessage(String conversationId, String content) =>
+      _map('/messages/conversations/$conversationId/messages', <String, dynamic>{'content': content});
+
+  Future<Map<String, dynamic>> getMyRatingSummary() => _getMap('/ratings/me/summary');
+  Future<List<dynamic>> listMyRatings() => _list('/ratings/me');
+  Future<Map<String, dynamic>> createRating({
+    required String rideId,
+    required String toUserId,
+    required int score,
+    String? comment,
+  }) =>
+      _map('/ratings', <String, dynamic>{
+        'rideId': rideId,
+        'toUserId': toUserId,
+        'score': score,
+        if (comment != null && comment.isNotEmpty) 'comment': comment,
+      });
+  Future<Map<String, dynamic>> getUserRatingSummary(String userId) => _getMap('/ratings/users/$userId/summary');
+
+  Future<List<dynamic>> _list(String path, {Map<String, dynamic>? query}) async {
+    final response = await _dio.get(path, queryParameters: query, options: _authOptions);
+    final data = response.data;
+    if (data is List) return data;
+    if (data is Map<String, dynamic> && data['methods'] is List) return List<dynamic>.from(data['methods'] as List);
+    throw DioException(
+      requestOptions: response.requestOptions,
+      message: 'Unexpected list response from $path',
+      response: response,
+      type: DioExceptionType.badResponse,
+    );
+  }
+
+  Future<Map<String, dynamic>> _getMap(String path, {Map<String, dynamic>? query}) async {
+    final response = await _dio.get(path, queryParameters: query, options: _authOptions);
+    if (response.data is Map) return Map<String, dynamic>.from(response.data as Map);
+    throw DioException(
+      requestOptions: response.requestOptions,
+      message: 'Unexpected map response from $path',
+      response: response,
+      type: DioExceptionType.badResponse,
+    );
+  }
+
+  Future<Map<String, dynamic>> _map(String path, Map<String, dynamic> body) async {
+    final response = await _dio.post(path, data: body, options: _authOptions);
+    if (response.data is Map) return Map<String, dynamic>.from(response.data as Map);
+    throw DioException(
+      requestOptions: response.requestOptions,
+      message: 'Unexpected map response from $path',
+      response: response,
+      type: DioExceptionType.badResponse,
+    );
+  }
+}
+
