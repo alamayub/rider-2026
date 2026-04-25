@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resetMemoryStore } from '../db/store.js';
-import { estimateFare } from '../modules/rides/rides.service.js';
+import { estimateFare } from '../services/rides.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('estimate fare varies by vehicle type multiplier', async () => {
   const bikeFare = await estimateFare({ cityId: 'blr', distanceKm: 10, vehicleTypeId: 'vt-bike' });

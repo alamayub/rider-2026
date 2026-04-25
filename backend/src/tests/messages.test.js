@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resetMemoryStore } from '../db/store.js';
-import { signIn } from '../modules/auth/auth.service.js';
-import { listConversationMessages, sendMessage, startConversation } from '../modules/messages/messages.service.js';
+import { signIn } from '../services/auth.service.js';
+import { listConversationMessages, sendMessage, startConversation } from '../services/messages.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('rider can start conversation with driver and exchange messages', async () => {
   const rider = (await signIn({ phone: '+911000000001', role: 'rider', password: 'Pass@123' })).user;

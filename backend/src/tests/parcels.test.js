@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resetMemoryStore, upsertDriverLocation } from '../db/store.js';
-import { addDriverVehicle } from '../modules/driver-vehicles/driver-vehicles.service.js';
-import { createParcel, estimateParcelFare, updateParcelStatus } from '../modules/parcels/parcels.service.js';
-import { signIn } from '../modules/auth/auth.service.js';
+import { upsertDriverLocation } from '../db/store.js';
+import { addDriverVehicle } from '../services/driver-vehicles.service.js';
+import { createParcel, estimateParcelFare, updateParcelStatus } from '../services/parcels.service.js';
+import { signIn } from '../services/auth.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('parcel flow estimates fare and matches correct vehicle driver', async () => {
   const rider = (await signIn({ phone: '+917700000001', role: 'rider', password: 'Pass@123' })).user;

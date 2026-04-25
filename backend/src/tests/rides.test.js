@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { countRides, resetMemoryStore } from '../db/store.js';
-import { createRide, estimateFare, updateRideStatus } from '../modules/rides/rides.service.js';
+import { countRides } from '../db/store.js';
+import { createRide, estimateFare, updateRideStatus } from '../services/rides.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('estimate fare uses city config', async () => {
   const estimate = await estimateFare({ cityId: 'blr', distanceKm: 10, vehicleTypeId: 'vt-cab' });

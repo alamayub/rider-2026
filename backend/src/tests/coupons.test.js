@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resetMemoryStore } from '../db/store.js';
-import { createCoupon, validateCoupon } from '../modules/coupons/coupons.service.js';
+import { createCoupon, validateCoupon } from '../services/coupons.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('validate coupon computes final fare', async () => {
   await createCoupon(

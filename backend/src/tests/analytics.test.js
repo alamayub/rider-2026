@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createPenaltyRecord, createRideRecord, resetMemoryStore } from '../db/store.js';
-import { signIn } from '../modules/auth/auth.service.js';
-import { getAdminAnalytics, getDriverAnalytics, getRiderAnalytics } from '../modules/analytics/analytics.service.js';
+import { createPenaltyRecord, createRideRecord } from '../db/store.js';
+import { signIn } from '../services/auth.service.js';
+import { getAdminAnalytics, getDriverAnalytics, getRiderAnalytics } from '../services/analytics.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('driver rider admin analytics include earnings commission penalties and rides', async () => {
   const rider = (await signIn({ phone: '+910000001001', role: 'rider', password: 'Pass@123' })).user;

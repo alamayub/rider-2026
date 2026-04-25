@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resetMemoryStore } from '../db/store.js';
-import { requestSignInOtp, resetAuthRateLimiters, signIn } from '../modules/auth/auth.service.js';
+import { requestSignInOtp, resetAuthRateLimiters, signIn } from '../services/auth.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
+
+registerDbHooks();
 
 test.beforeEach(() => {
-  resetMemoryStore();
   resetAuthRateLimiters();
 });
 

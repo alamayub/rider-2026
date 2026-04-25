@@ -22,7 +22,7 @@ export const env = {
     stripe: process.env.STRIPE_BASE_URL || 'https://checkout.stripe.com',
     razorpay: process.env.RAZORPAY_BASE_URL || 'https://checkout.razorpay.com'
   },
-  dbClient: process.env.DB_CLIENT || 'mysql',
+  dbClient: 'mysql',
   mysql: {
     host: process.env.MYSQL_HOST || '127.0.0.1',
     port: Number(process.env.MYSQL_PORT || 3306),

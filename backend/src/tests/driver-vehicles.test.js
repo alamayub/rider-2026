@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resetMemoryStore, upsertDriverLocation } from '../db/store.js';
-import { signIn } from '../modules/auth/auth.service.js';
-import { findNearestAvailableDriver } from '../modules/dispatch/dispatch.service.js';
-import { addDriverVehicle } from '../modules/driver-vehicles/driver-vehicles.service.js';
+import { upsertDriverLocation } from '../db/store.js';
+import { signIn } from '../services/auth.service.js';
+import { findNearestAvailableDriver } from '../services/dispatch.service.js';
+import { addDriverVehicle } from '../services/driver-vehicles.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('dispatch selects only drivers with requested vehicle type', async () => {
   const driverBike = (await signIn({ phone: '+919900000001', role: 'driver', password: 'Pass@123' })).user;

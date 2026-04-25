@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test": "DB_CLIENT=memory node --test src/tests/*.test.js",
+    "test": "node --test src/tests/*.test.js",
     "db:migrate": "node scripts/db-migrate.js",
     "load:test": "node scripts/load-test.js",
     "pilot:smoke": "node scripts/pilot-smoke.js"

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resetMemoryStore } from '../db/store.js';
-import { signIn } from '../modules/auth/auth.service.js';
+import { signIn } from '../services/auth.service.js';
 import {
   buildWebhookSignature,
   createDriverPayout,
@@ -13,11 +12,10 @@ import {
   getPaymentsReconciliation,
   markPaymentStatus,
   processPaymentWebhook
-} from '../modules/payments/payments.service.js';
+} from '../services/payments.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('payment lifecycle tracks success failure and timeline events', async () => {
   const rider = (await signIn({ phone: '+919111111111', role: 'rider', password: 'Pass@123' })).user;

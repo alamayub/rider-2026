@@ -2,7 +2,7 @@ import http from 'http';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { initDb } from './db/store.js';
-import { createSocketServer } from './modules/realtime/socket.js';
+import { createSocketServer } from './realtime/socket.js';
 import { logger } from './utils/logger.js';
 
 await initDb();

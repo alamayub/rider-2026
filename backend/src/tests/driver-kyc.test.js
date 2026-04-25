@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resetMemoryStore } from '../db/store.js';
-import { signIn } from '../modules/auth/auth.service.js';
-import { getMyKyc, reviewDriverKyc, submitDriverKyc } from '../modules/driver-kyc/driver-kyc.service.js';
+import { signIn } from '../services/auth.service.js';
+import { getMyKyc, reviewDriverKyc, submitDriverKyc } from '../services/driver-kyc.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('driver can submit KYC and admin can approve', async () => {
   const driver = (await signIn({ phone: '+918800000001', role: 'driver', password: 'Pass@123' })).user;

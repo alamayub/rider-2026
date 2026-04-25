@@ -839,9 +839,10 @@ async function migrateMySql() {
 }
 
 export async function initDb() {
-  if (env.dbClient === 'memory') {
-    return;
+  if (env.dbClient !== 'mysql') {
+    throw new Error('Only MySQL is supported. In-memory mode has been removed.');
   }
+  if (pool) return;
 
   pool = mysql.createPool({
     host: env.mysql.host,
@@ -3259,7 +3260,48 @@ export async function createAuditLogRecord({ entityType, entityId, action, actor
   return audit;
 }
 
-export function resetMemoryStore() {
+export async function resetMemoryStore() {
+  if (env.dbClient === 'mysql' && pool) {
+    const tables = [
+      'messages',
+      'conversations',
+      'coupon_redemptions',
+      'offers',
+      'coupons',
+      'penalties',
+      'account_actions',
+      'reports',
+      'ratings',
+      'user_rating_stats',
+      'payment_refunds',
+      'payment_events',
+      'payment_webhooks',
+      'payout_ledger',
+      'payments',
+      'ride_events',
+      'rides',
+      'parcel_events',
+      'parcels',
+      'driver_locations',
+      'driver_vehicles',
+      'driver_kyc_records',
+      'driver_daily_stats',
+      'rider_daily_stats',
+      'admin_daily_stats',
+      'users',
+      'payment_methods',
+      'vehicle_types',
+      'cities'
+    ];
+    await pool.query('SET FOREIGN_KEY_CHECKS = 0');
+    for (const table of tables) {
+      await pool.query(`TRUNCATE TABLE ${table}`);
+    }
+    await pool.query('SET FOREIGN_KEY_CHECKS = 1');
+    await migrateMySql();
+    return;
+  }
+
   memory.users = [];
   memory.rides = [];
   memory.parcels = [];

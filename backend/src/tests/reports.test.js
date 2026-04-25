@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findUserById, resetMemoryStore } from '../db/store.js';
-import { signIn } from '../modules/auth/auth.service.js';
-import { submitReport } from '../modules/reports/reports.service.js';
+import { findUserById } from '../db/store.js';
+import { signIn } from '../services/auth.service.js';
+import { submitReport } from '../services/reports.service.js';
+import { registerDbHooks } from './test-db-hooks.js';
 
-test.beforeEach(() => {
-  resetMemoryStore();
-});
+registerDbHooks();
 
 test('auto suspend then ban based on open report thresholds', async () => {
   const reporter = (await signIn({ phone: '+911111111111', role: 'rider', password: 'Pass@123' })).user;
