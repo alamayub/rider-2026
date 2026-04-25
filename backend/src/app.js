@@ -24,7 +24,8 @@ export function createApp() {
   const app = express();
 
   app.use(helmet());
-  app.use(cors({ origin: env.corsOrigin }));
+  // app.use(cors({ origin: env.corsOrigin }));
+  app.use(cors({ origin: '*' }));
   app.use(express.json());
   app.use(requestContext);
   app.use(httpLogger);

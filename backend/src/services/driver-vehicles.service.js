@@ -12,7 +12,7 @@ export async function addDriverVehicle({ driverId, vehicleTypeId, plateNumber, m
 
   return createDriverVehicleRecord({
     driverId,
-    vehicleTypeId,
+    vehicleTypeId: vehicleType.id,
     plateNumber,
     modelName,
     color,

@@ -31,7 +31,7 @@ export async function estimateParcelFare({ cityId, distanceKm, vehicleTypeId, we
   const amount = Math.round(baseAmount * Number(vehicleType.fareMultiplier));
 
   return {
-    cityId,
+    cityId: city.id,
     distanceKm: Number(distanceKm),
     weightKg: Number(weightKg || 0),
     vehicleTypeId: vehicleType.id,
@@ -56,12 +56,12 @@ export async function createParcel({
   vehicleTypeId
 }) {
   const estimate = await estimateParcelFare({ cityId, distanceKm, vehicleTypeId, weightKg });
-  const driverId = await findNearestAvailableDriver(cityId, pickup, vehicleTypeId);
+  const driverId = await findNearestAvailableDriver(estimate.cityId, pickup, estimate.vehicleTypeId);
 
   const parcel = await createParcelRecord({
     senderUserId,
     driverId,
-    cityId,
+    cityId: estimate.cityId,
     pickup,
     drop,
     senderName,
@@ -73,13 +73,13 @@ export async function createParcel({
     itemDescription,
     weightKg,
     fare: estimate.amount,
-    vehicleTypeId,
+    vehicleTypeId: estimate.vehicleTypeId,
     handoffOtp: generateOtp(),
     status: driverId ? 'matched' : 'requested',
     actorUserId: senderUserId
   });
 
-  await insertParcelEvent({ parcelId: parcel.id, type: 'parcel_created', payload: { senderUserId, cityId }, actorUserId: senderUserId });
+  await insertParcelEvent({ parcelId: parcel.id, type: 'parcel_created', payload: { senderUserId, cityId: estimate.cityId }, actorUserId: senderUserId });
   if (driverId) {
     await insertParcelEvent({ parcelId: parcel.id, type: 'driver_matched', payload: { driverId }, actorUserId: senderUserId });
   }

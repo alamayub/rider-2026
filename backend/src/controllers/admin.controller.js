@@ -1,4 +1,16 @@
-import { addCity, addVehicleType, getAllReports, getAuditLogs, getCities, getLiveRides, getVehicleTypes } from '../services/admin.service.js';
+import {
+  addCity,
+  addVehicleType,
+  getAllReports,
+  getAuditLogs,
+  getCities,
+  getLiveRides,
+  getUserAccountActions,
+  getUsers,
+  getVehicleTypes,
+  rebuildCounters,
+  setUserAccountStatus
+} from '../services/admin.service.js';
 
 export async function getCitiesController(_req, res) {
   return res.json(await getCities());
@@ -36,4 +48,35 @@ export async function createVehicleTypeController(req, res) {
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
+}
+
+export async function listUsersController(req, res) {
+  const limit = Number(req.query.limit || 200);
+  return res.json(
+    await getUsers({
+      role: req.query.role || null,
+      status: req.query.status || null,
+      limit: Number.isNaN(limit) ? 200 : limit
+    })
+  );
+}
+
+export async function updateUserStatusController(req, res) {
+  try {
+    const userId = req.params.userId;
+    const status = req.body.status;
+    const reason = req.body.reason;
+    return res.json(await setUserAccountStatus({ userId, status, reason, actorUserId: req.user.sub }));
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+}
+
+export async function userAccountActionsController(req, res) {
+  const limit = Number(req.query.limit || 100);
+  return res.json(await getUserAccountActions(req.params.userId, Number.isNaN(limit) ? 100 : limit));
+}
+
+export async function rebuildCountersController(req, res) {
+  return res.json(await rebuildCounters(req.user.sub));
 }

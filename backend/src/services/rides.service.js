@@ -31,7 +31,7 @@ export async function estimateFare({ cityId, distanceKm, vehicleTypeId }) {
   const amount = Math.round(baseAmount * Number(vehicleType.fareMultiplier || 1));
 
   return {
-    cityId,
+    cityId: city.id,
     distanceKm,
     vehicleTypeId: vehicleType.id,
     amount
@@ -40,7 +40,7 @@ export async function estimateFare({ cityId, distanceKm, vehicleTypeId }) {
 
 export async function createRide({ riderId, cityId, pickup, drop, distanceKm, couponCode, vehicleTypeId }) {
   const estimate = await estimateFare({ cityId, distanceKm, vehicleTypeId });
-  const driverId = await findNearestAvailableDriver(cityId, pickup, estimate.vehicleTypeId);
+  const driverId = await findNearestAvailableDriver(estimate.cityId, pickup, estimate.vehicleTypeId);
   let finalFare = estimate.amount;
   let couponResult = null;
 
@@ -69,7 +69,7 @@ export async function createRide({ riderId, cityId, pickup, drop, distanceKm, co
   const ride = await createRideRecord({
     riderId,
     driverId,
-    cityId,
+    cityId: estimate.cityId,
     pickup,
     drop,
     fare: finalFare,
@@ -79,7 +79,7 @@ export async function createRide({ riderId, cityId, pickup, drop, distanceKm, co
     actorUserId: riderId
   });
 
-  await insertRideEvent({ rideId: ride.id, type: 'ride_created', payload: { riderId, cityId }, actorUserId: riderId });
+  await insertRideEvent({ rideId: ride.id, type: 'ride_created', payload: { riderId, cityId: estimate.cityId }, actorUserId: riderId });
   if (driverId) {
     await insertRideEvent({ rideId: ride.id, type: 'driver_matched', payload: { driverId }, actorUserId: riderId });
   }

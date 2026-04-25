@@ -1,10 +1,26 @@
-import { randomUUID } from 'crypto';
+import { readFile } from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import mysql from 'mysql2/promise';
 import cityConfigs from '../config/cities.json' with { type: 'json' };
 import { env } from '../config/env.js';
 
-const now = () => new Date().toISOString();
-const createId = () => randomUUID();
+function toMySqlDateTime(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Invalid datetime value: ${value}`);
+  }
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+const now = () => toMySqlDateTime();
+let lastNumericId = 0n;
+const createId = () => {
+  const base = BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
+  lastNumericId = base > lastNumericId ? base : lastNumericId + 1n;
+  return lastNumericId.toString();
+};
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let pool = null;
 
@@ -103,6 +119,18 @@ const memory = {
   cities: [...cityConfigs]
 };
 
+async function applySchemaFromSqlFile() {
+  const schemaPath = path.resolve(__dirname, '../../sql/schema.sql');
+  const sql = await readFile(schemaPath, 'utf8');
+  const statements = sql
+    .split(/;\s*\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const statement of statements) {
+    await pool.query(statement);
+  }
+}
+
 function actorOrSystem(actorUserId) {
   return actorUserId || 'system';
 }
@@ -145,6 +173,90 @@ function parseJson(value, fallback = {}) {
   } catch {
     return fallback;
   }
+}
+
+function buildMemoryPlatformCounters() {
+  const users = memory.users;
+  const notifications = memory.notifications;
+  return {
+    usersTotal: users.length,
+    usersActive: users.filter((u) => u.status === 'active').length,
+    usersSuspended: users.filter((u) => u.status === 'suspended').length,
+    usersBanned: users.filter((u) => u.status === 'banned').length,
+    notificationsTotal: notifications.length,
+    notificationsSent: notifications.filter((n) => n.status === 'sent').length,
+    notificationsReceived: notifications.filter((n) => Boolean(n.receivedAt)).length,
+    notificationsDelivered: notifications.filter((n) => Boolean(n.deliveredAt)).length,
+    notificationsRead: notifications.filter((n) => Boolean(n.readAt)).length,
+    updatedAt: now()
+  };
+}
+
+async function refreshPlatformCounters() {
+  if (env.dbClient === 'memory') {
+    return buildMemoryPlatformCounters();
+  }
+  const [userRows] = await pool.query(
+    `SELECT
+      COUNT(*) AS usersTotal,
+      SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS usersActive,
+      SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) AS usersSuspended,
+      SUM(CASE WHEN status = 'banned' THEN 1 ELSE 0 END) AS usersBanned
+     FROM users`
+  );
+  const [notificationRows] = await pool.query(
+    `SELECT
+      COUNT(*) AS notificationsTotal,
+      SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS notificationsSent,
+      SUM(CASE WHEN received_at IS NOT NULL THEN 1 ELSE 0 END) AS notificationsReceived,
+      SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) AS notificationsDelivered,
+      SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END) AS notificationsRead
+     FROM notifications`
+  );
+  const ts = now();
+  const users = userRows[0] || {};
+  const notifications = notificationRows[0] || {};
+  const counters = {
+    usersTotal: Number(users.usersTotal || 0),
+    usersActive: Number(users.usersActive || 0),
+    usersSuspended: Number(users.usersSuspended || 0),
+    usersBanned: Number(users.usersBanned || 0),
+    notificationsTotal: Number(notifications.notificationsTotal || 0),
+    notificationsSent: Number(notifications.notificationsSent || 0),
+    notificationsReceived: Number(notifications.notificationsReceived || 0),
+    notificationsDelivered: Number(notifications.notificationsDelivered || 0),
+    notificationsRead: Number(notifications.notificationsRead || 0),
+    updatedAt: ts
+  };
+  await pool.query(
+    `INSERT INTO platform_counters
+      (id, users_total, users_active, users_suspended, users_banned, notifications_total, notifications_sent, notifications_received, notifications_delivered, notifications_read, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+      users_total = VALUES(users_total),
+      users_active = VALUES(users_active),
+      users_suspended = VALUES(users_suspended),
+      users_banned = VALUES(users_banned),
+      notifications_total = VALUES(notifications_total),
+      notifications_sent = VALUES(notifications_sent),
+      notifications_received = VALUES(notifications_received),
+      notifications_delivered = VALUES(notifications_delivered),
+      notifications_read = VALUES(notifications_read),
+      updated_at = VALUES(updated_at)`,
+    [
+      counters.usersTotal,
+      counters.usersActive,
+      counters.usersSuspended,
+      counters.usersBanned,
+      counters.notificationsTotal,
+      counters.notificationsSent,
+      counters.notificationsReceived,
+      counters.notificationsDelivered,
+      counters.notificationsRead,
+      counters.updatedAt
+    ]
+  );
+  return counters;
 }
 
 function normalizeRide(row) {
@@ -197,319 +309,50 @@ function normalizeParcel(row) {
 }
 
 async function migrateMySql() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id VARCHAR(36) PRIMARY KEY,
-      phone VARCHAR(32) NOT NULL,
-      email VARCHAR(190) NULL,
-      password_hash VARCHAR(255) NULL,
-      auth_otp VARCHAR(8) NULL,
-      auth_otp_expires_at DATETIME NULL,
-      auth_otp_last_sent_at DATETIME NULL,
-      auth_otp_window_started_at DATETIME NULL,
-      auth_otp_window_count INT NOT NULL DEFAULT 0,
-      failed_otp_count INT NOT NULL DEFAULT 0,
-      otp_locked_until DATETIME NULL,
-      failed_signin_count INT NOT NULL DEFAULT 0,
-      signin_locked_until DATETIME NULL,
-      role VARCHAR(16) NOT NULL,
-      status VARCHAR(16) NOT NULL DEFAULT 'active',
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_phone_role (phone, role),
-      UNIQUE KEY uniq_email_role (email, role)
-    )
-  `);
-  await pool.query('ALTER TABLE users MODIFY phone VARCHAR(32) NOT NULL');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(190) NULL');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255) NULL');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_otp VARCHAR(8) NULL');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_otp_expires_at DATETIME NULL');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_otp_last_sent_at DATETIME NULL');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_otp_window_started_at DATETIME NULL');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_otp_window_count INT NOT NULL DEFAULT 0');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_otp_count INT NOT NULL DEFAULT 0');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_locked_until DATETIME NULL');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_signin_count INT NOT NULL DEFAULT 0');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS signin_locked_until DATETIME NULL');
-  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_email_role ON users (email, role)');
-  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'active'");
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at DATETIME NOT NULL');
-  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36) NOT NULL DEFAULT 'system'");
+  const columnExists = async (tableName, columnName) => {
+    const [rows] = await pool.query(
+      `SELECT COUNT(*) AS count
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = ?
+         AND COLUMN_NAME = ?`,
+      [tableName, columnName]
+    );
+    return Number(rows?.[0]?.count || 0) > 0;
+  };
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS cities (
-      id VARCHAR(36) PRIMARY KEY,
-      name VARCHAR(120) NOT NULL,
-      currency VARCHAR(8) NOT NULL,
-      base_fare DECIMAL(10,2) NOT NULL,
-      per_km DECIMAL(10,2) NOT NULL,
-      support_number VARCHAR(40) NULL,
-      tax_percent DECIMAL(5,2) NOT NULL DEFAULT 0
-      ,created_at DATETIME NOT NULL
-      ,updated_at DATETIME NOT NULL
-      ,created_by VARCHAR(36) NOT NULL
-      ,updated_by VARCHAR(36) NOT NULL
-    )
-  `);
-  await pool.query('ALTER TABLE cities ADD COLUMN IF NOT EXISTS created_at DATETIME NOT NULL');
-  await pool.query('ALTER TABLE cities ADD COLUMN IF NOT EXISTS updated_at DATETIME NOT NULL');
-  await pool.query("ALTER TABLE cities ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query("ALTER TABLE cities ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36) NOT NULL DEFAULT 'system'");
+  const addColumnIfMissing = async (tableName, columnName, definitionSql) => {
+    if (await columnExists(tableName, columnName)) return;
+    await pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${definitionSql}`);
+  };
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS rides (
-      id VARCHAR(36) PRIMARY KEY,
-      rider_id VARCHAR(36) NOT NULL,
-      driver_id VARCHAR(36) NULL,
-      city_id VARCHAR(36) NOT NULL,
-      pickup JSON NOT NULL,
-      drop_location JSON NOT NULL,
-      fare DECIMAL(10,2) NOT NULL,
-      vehicle_type_id VARCHAR(36) NULL,
-      ride_start_otp VARCHAR(8) NOT NULL,
-      ride_start_otp_verified_at DATETIME NULL,
-      status VARCHAR(24) NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_rides_rider_id (rider_id),
-      KEY idx_rides_driver_id (driver_id),
-      KEY idx_rides_city_id (city_id),
-      KEY idx_rides_status (status)
-    )
-  `);
-  await pool.query('ALTER TABLE rides ADD COLUMN IF NOT EXISTS vehicle_type_id VARCHAR(36) NULL');
-  await pool.query("ALTER TABLE rides ADD COLUMN IF NOT EXISTS ride_start_otp VARCHAR(8) NOT NULL DEFAULT '000000'");
-  await pool.query('ALTER TABLE rides ADD COLUMN IF NOT EXISTS ride_start_otp_verified_at DATETIME NULL');
-  await pool.query("ALTER TABLE rides ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query("ALTER TABLE rides ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36) NOT NULL DEFAULT 'system'");
+  const indexExists = async (tableName, indexName) => {
+    const [rows] = await pool.query(
+      `SELECT COUNT(*) AS count
+       FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = ?
+         AND INDEX_NAME = ?`,
+      [tableName, indexName]
+    );
+    return Number(rows?.[0]?.count || 0) > 0;
+  };
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS parcels (
-      id VARCHAR(36) PRIMARY KEY,
-      sender_user_id VARCHAR(36) NOT NULL,
-      driver_id VARCHAR(36) NULL,
-      city_id VARCHAR(36) NOT NULL,
-      pickup JSON NOT NULL,
-      drop_location JSON NOT NULL,
-      sender_name VARCHAR(160) NULL,
-      sender_phone VARCHAR(32) NULL,
-      receiver_name VARCHAR(160) NOT NULL,
-      receiver_phone VARCHAR(32) NOT NULL,
-      receiver_email VARCHAR(190) NULL,
-      receiver_address VARCHAR(255) NULL,
-      item_description VARCHAR(255) NOT NULL,
-      weight_kg DECIMAL(10,2) NOT NULL,
-      fare DECIMAL(10,2) NOT NULL,
-      vehicle_type_id VARCHAR(36) NULL,
-      handoff_otp VARCHAR(8) NOT NULL,
-      pickup_otp_verified_at DATETIME NULL,
-      drop_otp_verified_at DATETIME NULL,
-      status VARCHAR(24) NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_parcels_sender (sender_user_id),
-      KEY idx_parcels_driver (driver_id),
-      KEY idx_parcels_status (status)
-    )
-  `);
-  await pool.query("ALTER TABLE parcels ADD COLUMN IF NOT EXISTS handoff_otp VARCHAR(8) NOT NULL DEFAULT '000000'");
-  await pool.query('ALTER TABLE parcels ADD COLUMN IF NOT EXISTS pickup_otp_verified_at DATETIME NULL');
-  await pool.query('ALTER TABLE parcels ADD COLUMN IF NOT EXISTS drop_otp_verified_at DATETIME NULL');
-  await pool.query('ALTER TABLE parcels ADD COLUMN IF NOT EXISTS sender_name VARCHAR(160) NULL');
-  await pool.query('ALTER TABLE parcels ADD COLUMN IF NOT EXISTS sender_phone VARCHAR(32) NULL');
-  await pool.query('ALTER TABLE parcels ADD COLUMN IF NOT EXISTS receiver_email VARCHAR(190) NULL');
-  await pool.query('ALTER TABLE parcels ADD COLUMN IF NOT EXISTS receiver_address VARCHAR(255) NULL');
+  const createUniqueIndexIfMissing = async (tableName, indexName, columnsSql) => {
+    if (await indexExists(tableName, indexName)) return;
+    await pool.query(`CREATE UNIQUE INDEX \`${indexName}\` ON \`${tableName}\` (${columnsSql})`);
+  };
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS parcel_events (
-      id VARCHAR(36) PRIMARY KEY,
-      parcel_id VARCHAR(36) NOT NULL,
-      type VARCHAR(64) NOT NULL,
-      payload JSON NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_parcel_events_parcel (parcel_id),
-      KEY idx_parcel_events_created_at (created_at)
-    )
-  `);
+  await applySchemaFromSqlFile();
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ride_events (
-      id VARCHAR(36) PRIMARY KEY,
-      ride_id VARCHAR(36) NOT NULL,
-      type VARCHAR(64) NOT NULL,
-      payload JSON NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_ride_events_ride_id (ride_id),
-      KEY idx_ride_events_created_at (created_at)
-    )
-  `);
-  await pool.query('ALTER TABLE ride_events ADD COLUMN IF NOT EXISTS updated_at DATETIME NOT NULL');
-  await pool.query("ALTER TABLE ride_events ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query("ALTER TABLE ride_events ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS driver_locations (
-      driver_id VARCHAR(36) PRIMARY KEY,
-      city_id VARCHAR(36) NOT NULL,
-      lat DOUBLE NOT NULL,
-      lng DOUBLE NOT NULL,
-      online BOOLEAN NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_driver_locations_city_id (city_id)
-    )
-  `);
-  await pool.query('ALTER TABLE driver_locations ADD COLUMN IF NOT EXISTS created_at DATETIME NOT NULL');
-  await pool.query("ALTER TABLE driver_locations ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query("ALTER TABLE driver_locations ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS payments (
-      id VARCHAR(36) PRIMARY KEY,
-      ride_id VARCHAR(36) NOT NULL,
-      method VARCHAR(32) NOT NULL,
-      provider VARCHAR(32) NOT NULL DEFAULT 'esewa',
-      status VARCHAR(24) NOT NULL,
-      amount DECIMAL(10,2) NOT NULL,
-      currency VARCHAR(8) NOT NULL DEFAULT 'INR',
-      provider_order_id VARCHAR(128) NULL,
-      provider_payment_id VARCHAR(128) NULL,
-      provider_metadata JSON NULL,
-      failure_code VARCHAR(64) NULL,
-      failure_reason VARCHAR(255) NULL,
-      refunded_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL
-    )
-  `);
-  await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS currency VARCHAR(8) NOT NULL DEFAULT 'INR'");
-  await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider VARCHAR(32) NOT NULL DEFAULT 'esewa'");
-  await pool.query('ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider_order_id VARCHAR(128) NULL');
-  await pool.query('ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider_payment_id VARCHAR(128) NULL');
-  await pool.query('ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider_metadata JSON NULL');
-  await pool.query('ALTER TABLE payments ADD COLUMN IF NOT EXISTS failure_code VARCHAR(64) NULL');
-  await pool.query('ALTER TABLE payments ADD COLUMN IF NOT EXISTS failure_reason VARCHAR(255) NULL');
-  await pool.query('ALTER TABLE payments ADD COLUMN IF NOT EXISTS refunded_amount DECIMAL(10,2) NOT NULL DEFAULT 0');
-  await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS payment_events (
-      id VARCHAR(36) PRIMARY KEY,
-      payment_id VARCHAR(36) NOT NULL,
-      type VARCHAR(64) NOT NULL,
-      payload JSON NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_payment_events_payment (payment_id),
-      KEY idx_payment_events_created_at (created_at)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS payment_refunds (
-      id VARCHAR(36) PRIMARY KEY,
-      payment_id VARCHAR(36) NOT NULL,
-      amount DECIMAL(10,2) NOT NULL,
-      reason VARCHAR(255) NULL,
-      status VARCHAR(24) NOT NULL,
-      provider_refund_id VARCHAR(128) NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_payment_refunds_payment (payment_id),
-      KEY idx_payment_refunds_status (status)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS payment_webhooks (
-      id VARCHAR(36) PRIMARY KEY,
-      provider VARCHAR(32) NOT NULL,
-      event_id VARCHAR(128) NOT NULL,
-      event_type VARCHAR(64) NOT NULL,
-      payment_id VARCHAR(36) NULL,
-      payload JSON NOT NULL,
-      processed_at DATETIME NOT NULL,
-      status VARCHAR(24) NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_webhook_provider_event (provider, event_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS payout_ledger (
-      id VARCHAR(36) PRIMARY KEY,
-      payment_id VARCHAR(36) NOT NULL,
-      driver_id VARCHAR(36) NOT NULL,
-      amount DECIMAL(10,2) NOT NULL,
-      currency VARCHAR(8) NOT NULL DEFAULT 'INR',
-      status VARCHAR(24) NOT NULL,
-      note VARCHAR(255) NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_payout_ledger_driver (driver_id),
-      KEY idx_payout_ledger_status (status),
-      KEY idx_payout_ledger_payment (payment_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS payment_methods (
-      id VARCHAR(36) PRIMARY KEY,
-      provider VARCHAR(32) NOT NULL,
-      method_code VARCHAR(64) NOT NULL,
-      display_name VARCHAR(120) NOT NULL,
-      category VARCHAR(32) NOT NULL,
-      app_scopes JSON NOT NULL,
-      countries JSON NOT NULL,
-      currencies JSON NOT NULL,
-      is_active BOOLEAN NOT NULL DEFAULT true,
-      sort_order INT NOT NULL DEFAULT 100,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_payment_provider_method (provider, method_code)
-    )
-  `);
-  await pool.query("ALTER TABLE payment_methods ADD COLUMN IF NOT EXISTS app_scopes JSON NOT NULL");
-
-  const [existingPaymentMethods] = await pool.query('SELECT COUNT(*) AS count FROM payment_methods');
-  if (existingPaymentMethods[0].count === 0) {
+  const [freshExistingPaymentMethods] = await pool.query('SELECT COUNT(*) AS count FROM payment_methods');
+  if (freshExistingPaymentMethods[0].count === 0) {
     for (const method of paymentMethodConfigs) {
       const ts = now();
       await pool.query(
-        `INSERT INTO payment_methods (id, provider, method_code, display_name, category, app_scopes, countries, currencies, is_active, sort_order, created_at, updated_at, created_by, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO payment_methods (provider, method_code, display_name, category, app_scopes, countries, currencies, is_active, sort_order, created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          method.id,
           method.provider,
           method.methodCode,
           method.displayName,
@@ -528,359 +371,29 @@ async function migrateMySql() {
     }
   }
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ratings (
-      id VARCHAR(36) PRIMARY KEY,
-      ride_id VARCHAR(36) NOT NULL,
-      from_user_id VARCHAR(36) NOT NULL,
-      to_user_id VARCHAR(36) NOT NULL,
-      score INT NOT NULL,
-      comment TEXT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_rating_direction (ride_id, from_user_id, to_user_id)
-    )
-  `);
-  await pool.query('ALTER TABLE ratings ADD COLUMN IF NOT EXISTS updated_at DATETIME NOT NULL');
-  await pool.query("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_rating_direction ON ratings (ride_id, from_user_id, to_user_id)');
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_rating_stats (
-      user_id VARCHAR(36) PRIMARY KEY,
-      total_received_ratings INT NOT NULL DEFAULT 0,
-      total_received_score INT NOT NULL DEFAULT 0,
-      average_received_rating DECIMAL(5,2) NOT NULL DEFAULT 0,
-      last_rated_at DATETIME NULL,
-      updated_at DATETIME NOT NULL
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS reports (
-      id VARCHAR(36) PRIMARY KEY,
-      ride_id VARCHAR(36) NULL,
-      reporter_user_id VARCHAR(36) NOT NULL,
-      reported_user_id VARCHAR(36) NOT NULL,
-      reason VARCHAR(128) NOT NULL,
-      description TEXT NULL,
-      status VARCHAR(24) NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_reports_reported_user_id (reported_user_id),
-      KEY idx_reports_status (status)
-    )
-  `);
-  await pool.query('ALTER TABLE reports ADD COLUMN IF NOT EXISTS updated_at DATETIME NOT NULL');
-  await pool.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS account_actions (
-      id VARCHAR(36) PRIMARY KEY,
-      user_id VARCHAR(36) NOT NULL,
-      action VARCHAR(24) NOT NULL,
-      source VARCHAR(64) NOT NULL,
-      metadata JSON NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_account_actions_user_id (user_id)
-    )
-  `);
-  await pool.query('ALTER TABLE account_actions ADD COLUMN IF NOT EXISTS updated_at DATETIME NOT NULL');
-  await pool.query("ALTER TABLE account_actions ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-  await pool.query("ALTER TABLE account_actions ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36) NOT NULL DEFAULT 'system'");
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS audit_logs (
-      id VARCHAR(36) PRIMARY KEY,
-      entity_type VARCHAR(64) NOT NULL,
-      entity_id VARCHAR(64) NOT NULL,
-      action VARCHAR(24) NOT NULL,
-      actor_user_id VARCHAR(36) NOT NULL,
-      before_state JSON NULL,
-      after_state JSON NULL,
-      created_at DATETIME NOT NULL,
-      KEY idx_audit_logs_entity (entity_type, entity_id),
-      KEY idx_audit_logs_created_at (created_at)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS coupons (
-      id VARCHAR(36) PRIMARY KEY,
-      code VARCHAR(64) NOT NULL,
-      discount_type VARCHAR(16) NOT NULL,
-      discount_value DECIMAL(10,2) NOT NULL,
-      max_discount DECIMAL(10,2) NULL,
-      min_fare DECIMAL(10,2) NOT NULL DEFAULT 0,
-      starts_at DATETIME NOT NULL,
-      ends_at DATETIME NOT NULL,
-      usage_limit INT NOT NULL DEFAULT 0,
-      used_count INT NOT NULL DEFAULT 0,
-      is_active BOOLEAN NOT NULL DEFAULT true,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_coupon_code (code)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS offers (
-      id VARCHAR(36) PRIMARY KEY,
-      title VARCHAR(160) NOT NULL,
-      description TEXT NULL,
-      city_id VARCHAR(36) NULL,
-      starts_at DATETIME NOT NULL,
-      ends_at DATETIME NOT NULL,
-      is_active BOOLEAN NOT NULL DEFAULT true,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS coupon_redemptions (
-      id VARCHAR(36) PRIMARY KEY,
-      coupon_id VARCHAR(36) NOT NULL,
-      coupon_code VARCHAR(64) NOT NULL,
-      ride_id VARCHAR(36) NOT NULL,
-      rider_id VARCHAR(36) NOT NULL,
-      discount_amount DECIMAL(10,2) NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_coupon_redemptions_coupon_id (coupon_id),
-      KEY idx_coupon_redemptions_rider_id (rider_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS penalties (
-      id VARCHAR(36) PRIMARY KEY,
-      user_id VARCHAR(36) NOT NULL,
-      ride_id VARCHAR(36) NULL,
-      amount DECIMAL(10,2) NOT NULL,
-      reason VARCHAR(255) NOT NULL,
-      status VARCHAR(24) NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_penalties_user_id (user_id),
-      KEY idx_penalties_status (status)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS driver_daily_stats (
-      stat_date DATE NOT NULL,
-      driver_id VARCHAR(36) NOT NULL,
-      total_rides INT NOT NULL DEFAULT 0,
-      completed_rides INT NOT NULL DEFAULT 0,
-      cancelled_rides INT NOT NULL DEFAULT 0,
-      gross_earnings DECIMAL(12,2) NOT NULL DEFAULT 0,
-      commission_given DECIMAL(12,2) NOT NULL DEFAULT 0,
-      penalties_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
-      net_earnings DECIMAL(12,2) NOT NULL DEFAULT 0,
-      updated_at DATETIME NOT NULL,
-      PRIMARY KEY (stat_date, driver_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS rider_daily_stats (
-      stat_date DATE NOT NULL,
-      rider_id VARCHAR(36) NOT NULL,
-      total_rides INT NOT NULL DEFAULT 0,
-      completed_rides INT NOT NULL DEFAULT 0,
-      cancelled_rides INT NOT NULL DEFAULT 0,
-      total_spent DECIMAL(12,2) NOT NULL DEFAULT 0,
-      total_savings DECIMAL(12,2) NOT NULL DEFAULT 0,
-      penalties_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
-      updated_at DATETIME NOT NULL,
-      PRIMARY KEY (stat_date, rider_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS admin_daily_stats (
-      stat_date DATE NOT NULL PRIMARY KEY,
-      total_rides INT NOT NULL DEFAULT 0,
-      completed_rides INT NOT NULL DEFAULT 0,
-      cancelled_rides INT NOT NULL DEFAULT 0,
-      gross_bookings DECIMAL(12,2) NOT NULL DEFAULT 0,
-      commission_earned DECIMAL(12,2) NOT NULL DEFAULT 0,
-      penalties_collected DECIMAL(12,2) NOT NULL DEFAULT 0,
-      net_platform_revenue DECIMAL(12,2) NOT NULL DEFAULT 0,
-      updated_at DATETIME NOT NULL
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS conversations (
-      id VARCHAR(36) PRIMARY KEY,
-      participant_a_id VARCHAR(36) NOT NULL,
-      participant_b_id VARCHAR(36) NOT NULL,
-      ride_id VARCHAR(36) NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_conversation_pair (participant_a_id, participant_b_id, ride_id),
-      KEY idx_conversations_participant_a (participant_a_id),
-      KEY idx_conversations_participant_b (participant_b_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id VARCHAR(36) PRIMARY KEY,
-      conversation_id VARCHAR(36) NOT NULL,
-      sender_user_id VARCHAR(36) NOT NULL,
-      content TEXT NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_messages_conversation (conversation_id),
-      KEY idx_messages_created_at (created_at)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS notifications (
-      id VARCHAR(36) PRIMARY KEY,
-      recipient_user_id VARCHAR(36) NOT NULL,
-      type VARCHAR(64) NOT NULL,
-      title VARCHAR(255) NOT NULL,
-      body TEXT NOT NULL,
-      payload JSON NULL,
-      channel VARCHAR(32) NOT NULL,
-      status VARCHAR(24) NOT NULL,
-      sent_at DATETIME NOT NULL,
-      received_at DATETIME NULL,
-      delivered_at DATETIME NULL,
-      read_at DATETIME NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      KEY idx_notifications_recipient (recipient_user_id),
-      KEY idx_notifications_status (status),
-      KEY idx_notifications_created_at (created_at)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_device_tokens (
-      id VARCHAR(36) PRIMARY KEY,
-      user_id VARCHAR(36) NOT NULL,
-      app VARCHAR(32) NOT NULL,
-      platform VARCHAR(16) NOT NULL,
-      token VARCHAR(512) NOT NULL,
-      is_active BOOLEAN NOT NULL DEFAULT true,
-      last_seen_at DATETIME NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_user_device_token (user_id, token),
-      KEY idx_device_tokens_user (user_id),
-      KEY idx_device_tokens_active (is_active)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS driver_vehicles (
-      id VARCHAR(36) PRIMARY KEY,
-      driver_id VARCHAR(36) NOT NULL,
-      vehicle_type_id VARCHAR(36) NOT NULL,
-      plate_number VARCHAR(32) NOT NULL,
-      model_name VARCHAR(120) NULL,
-      color VARCHAR(64) NULL,
-      is_active BOOLEAN NOT NULL DEFAULT true,
-      is_default BOOLEAN NOT NULL DEFAULT false,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_driver_plate (driver_id, plate_number),
-      KEY idx_driver_vehicle_driver (driver_id),
-      KEY idx_driver_vehicle_type (vehicle_type_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS driver_kyc_records (
-      id VARCHAR(36) PRIMARY KEY,
-      driver_id VARCHAR(36) NOT NULL,
-      full_name VARCHAR(160) NOT NULL,
-      license_number VARCHAR(80) NOT NULL,
-      document_url VARCHAR(512) NULL,
-      status VARCHAR(24) NOT NULL,
-      rejection_reason TEXT NULL,
-      reviewed_by VARCHAR(36) NULL,
-      reviewed_at DATETIME NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_driver_kyc (driver_id),
-      KEY idx_driver_kyc_status (status)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS vehicle_types (
-      id VARCHAR(36) PRIMARY KEY,
-      code VARCHAR(64) NOT NULL,
-      name VARCHAR(120) NOT NULL,
-      capacity INT NOT NULL,
-      fare_multiplier DECIMAL(10,2) NOT NULL,
-      is_active BOOLEAN NOT NULL DEFAULT true,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL,
-      created_by VARCHAR(36) NOT NULL,
-      updated_by VARCHAR(36) NOT NULL,
-      UNIQUE KEY uniq_vehicle_type_code (code)
-    )
-  `);
-
-  const [existingVehicleTypes] = await pool.query('SELECT COUNT(*) AS count FROM vehicle_types');
-  if (existingVehicleTypes[0].count === 0) {
+  const [freshExistingVehicleTypes] = await pool.query('SELECT COUNT(*) AS count FROM vehicle_types');
+  if (freshExistingVehicleTypes[0].count === 0) {
     for (const vt of vehicleTypeConfigs) {
       const ts = now();
       await pool.query(
         `INSERT INTO vehicle_types (code, name, capacity, fare_multiplier, is_active, created_at, updated_at, created_by, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [vt.id, vt.code, vt.name, vt.capacity, vt.fareMultiplier, vt.isActive, ts, ts, 'system', 'system']
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [vt.code, vt.name, vt.capacity, vt.fareMultiplier, vt.isActive, ts, ts, 'system', 'system']
       );
     }
   }
 
-  const [existingCities] = await pool.query('SELECT COUNT(*) AS count FROM cities');
-  if (existingCities[0].count === 0) {
+  const [freshExistingCities] = await pool.query('SELECT COUNT(*) AS count FROM cities');
+  if (freshExistingCities[0].count === 0) {
     for (const city of cityConfigs) {
       const seedTs = now();
       await pool.query(
-        'INSERT INTO cities (id, name, currency, base_fare, per_km, support_number, tax_percent, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO cities (code, name, currency, base_fare, per_km, support_number, tax_percent, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [city.id, city.name, city.currency, city.baseFare, city.perKm, city.supportNumber || null, city.taxPercent ?? 0, seedTs, seedTs, 'system', 'system']
       );
     }
   }
+  await refreshPlatformCounters();
 }
 
 export async function initDb() {
@@ -982,6 +495,7 @@ export async function createUser({ phone, email, role, passwordHash = null }) {
     user.updatedBy
   ]);
   await createAuditLogRecord({ entityType: 'user', entityId: user.id, action: 'create', actorUserId: 'system', beforeState: null, afterState: user });
+  await refreshPlatformCounters();
   return user;
 }
 
@@ -1000,6 +514,24 @@ export async function findUserById(userId) {
     [userId]
   );
   return rows[0] || null;
+}
+
+export async function listUsers({ role = null, status = null, limit = 200 } = {}) {
+  if (env.dbClient === 'memory') {
+    return memory.users
+      .filter((u) => (!role || u.role === role) && (!status || u.status === status))
+      .slice(0, limit);
+  }
+  const [rows] = await pool.query(
+    `SELECT id, phone, email, role, status, created_at AS createdAt
+     FROM users
+     WHERE (? IS NULL OR role = ?)
+       AND (? IS NULL OR status = ?)
+     ORDER BY created_at DESC
+     LIMIT ?`,
+    [role || null, role || null, status || null, status || null, limit]
+  );
+  return rows;
 }
 
 export async function setUserAuthOtp({ userId, otp, expiresAt, actorUserId }) {
@@ -1140,18 +672,19 @@ export async function updateUserStatus(userId, status) {
   const after = await findUserById(userId);
   if (after) {
     await createAuditLogRecord({ entityType: 'user', entityId: userId, action: 'update', actorUserId: 'system', beforeState: before, afterState: after });
+    await refreshPlatformCounters();
   }
   return after;
 }
 
 export async function findCityById(cityId) {
   if (env.dbClient === 'memory') {
-    return memory.cities.find((c) => c.id === cityId) || null;
+    return memory.cities.find((c) => String(c.id) === String(cityId) || String(c.code || '') === String(cityId)) || null;
   }
 
   const [rows] = await pool.query(
-    'SELECT id, name, currency, base_fare AS baseFare, per_km AS perKm, support_number AS supportNumber, tax_percent AS taxPercent FROM cities WHERE id = ? LIMIT 1',
-    [cityId]
+    'SELECT id, code, name, currency, base_fare AS baseFare, per_km AS perKm, support_number AS supportNumber, tax_percent AS taxPercent FROM cities WHERE id = ? OR code = ? LIMIT 1',
+    [cityId, cityId]
   );
   return rows[0] || null;
 }
@@ -1159,7 +692,7 @@ export async function findCityById(cityId) {
 export async function listCities() {
   if (env.dbClient === 'memory') return memory.cities;
   const [rows] = await pool.query(
-    'SELECT id, name, currency, base_fare AS baseFare, per_km AS perKm, support_number AS supportNumber, tax_percent AS taxPercent FROM cities'
+    'SELECT id, code, name, currency, base_fare AS baseFare, per_km AS perKm, support_number AS supportNumber, tax_percent AS taxPercent FROM cities'
   );
   return rows;
 }
@@ -1167,8 +700,15 @@ export async function listCities() {
 export async function createCity(data, actorUserId) {
   const actorId = actorOrSystem(actorUserId);
   const ts = now();
+  const generatedCode =
+    String(data.name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || `city-${createId()}`;
   const city = {
-    id: data.id || createId(),
+    id: data.id || null,
+    code: data.code || data.id || generatedCode,
     name: data.name,
     currency: data.currency || 'INR',
     baseFare: data.baseFare ?? 50,
@@ -1182,14 +722,16 @@ export async function createCity(data, actorUserId) {
   };
 
   if (env.dbClient === 'memory') {
+    if (!city.id) city.id = createId();
     memory.cities.push(city);
     return city;
   }
 
-  await pool.query(
-    'INSERT INTO cities (id, name, currency, base_fare, per_km, support_number, tax_percent, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [city.id, city.name, city.currency, city.baseFare, city.perKm, city.supportNumber, city.taxPercent, city.createdAt, city.updatedAt, city.createdBy, city.updatedBy]
+  const [result] = await pool.query(
+    'INSERT INTO cities (code, name, currency, base_fare, per_km, support_number, tax_percent, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [city.code, city.name, city.currency, city.baseFare, city.perKm, city.supportNumber, city.taxPercent, city.createdAt, city.updatedAt, city.createdBy, city.updatedBy]
   );
+  city.id = result.insertId;
   await createAuditLogRecord({ entityType: 'city', entityId: city.id, action: 'create', actorUserId: actorId, beforeState: null, afterState: city });
   return city;
 }
@@ -2289,8 +1831,8 @@ export async function createCouponRecord(data, actorUserId) {
     discountValue: Number(data.discountValue),
     maxDiscount: data.maxDiscount == null ? null : Number(data.maxDiscount),
     minFare: Number(data.minFare ?? 0),
-    startsAt: data.startsAt,
-    endsAt: data.endsAt,
+    startsAt: toMySqlDateTime(data.startsAt),
+    endsAt: toMySqlDateTime(data.endsAt),
     usageLimit: Number(data.usageLimit ?? 0),
     usedCount: 0,
     isActive: data.isActive ?? true,
@@ -2424,8 +1966,8 @@ export async function createOfferRecord(data, actorUserId) {
     title: data.title,
     description: data.description || '',
     cityId: data.cityId || null,
-    startsAt: data.startsAt,
-    endsAt: data.endsAt,
+    startsAt: toMySqlDateTime(data.startsAt),
+    endsAt: toMySqlDateTime(data.endsAt),
     isActive: data.isActive ?? true,
     createdAt: ts,
     updatedAt: ts,
@@ -2448,7 +1990,7 @@ export async function createOfferRecord(data, actorUserId) {
 }
 
 export async function listActiveOffers(cityId) {
-  const current = new Date().toISOString();
+  const current = now();
   if (env.dbClient === 'memory') {
     return memory.offers.filter((o) => o.isActive && o.startsAt <= current && o.endsAt >= current && (!o.cityId || !cityId || o.cityId === cityId));
   }
@@ -2742,15 +2284,15 @@ export async function listVehicleTypes({ onlyActive = true } = {}) {
 export async function findVehicleTypeById(id) {
   const normalized = String(id || '');
   if (env.dbClient === 'memory') {
-    return memory.vehicleTypes.find((v) => v.id === normalized) || null;
+    return memory.vehicleTypes.find((v) => String(v.id) === normalized || String(v.code) === normalized) || null;
   }
 
   const [rows] = await pool.query(
     `SELECT id, code, name, capacity, fare_multiplier AS fareMultiplier, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt
      FROM vehicle_types
-     WHERE id = ?
+     WHERE id = ? OR code = ?
      LIMIT 1`,
-    [normalized]
+    [normalized, normalized]
   );
   return rows[0] || null;
 }
@@ -2759,7 +2301,7 @@ export async function createVehicleTypeRecord(data, actorUserId) {
   const actorId = actorOrSystem(actorUserId);
   const ts = now();
   const vt = {
-    id: data.id || createId(),
+    id: data.id || null,
     code: String(data.code).toLowerCase(),
     name: data.name,
     capacity: Number(data.capacity),
@@ -2772,15 +2314,17 @@ export async function createVehicleTypeRecord(data, actorUserId) {
   };
 
   if (env.dbClient === 'memory') {
+    if (!vt.id) vt.id = createId();
     memory.vehicleTypes.push(vt);
     return vt;
   }
 
-  await pool.query(
-    `INSERT INTO vehicle_types (id, code, name, capacity, fare_multiplier, is_active, created_at, updated_at, created_by, updated_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [vt.id, vt.code, vt.name, vt.capacity, vt.fareMultiplier, vt.isActive, vt.createdAt, vt.updatedAt, vt.createdBy, vt.updatedBy]
+  const [result] = await pool.query(
+    `INSERT INTO vehicle_types (code, name, capacity, fare_multiplier, is_active, created_at, updated_at, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [vt.code, vt.name, vt.capacity, vt.fareMultiplier, vt.isActive, vt.createdAt, vt.updatedAt, vt.createdBy, vt.updatedBy]
   );
+  vt.id = result.insertId;
   await createAuditLogRecord({ entityType: 'vehicle_type', entityId: vt.id, action: 'create', actorUserId: actorId, beforeState: null, afterState: vt });
   return vt;
 }
@@ -3238,6 +2782,7 @@ export async function createNotificationRecord({ recipientUserId, type, title, b
     beforeState: null,
     afterState: notification
   });
+  await refreshPlatformCounters();
   return notification;
 }
 
@@ -3317,8 +2862,59 @@ export async function markNotificationStatus({ notificationId, recipientUserId, 
       beforeState: existing,
       afterState: updated
     });
+    await refreshPlatformCounters();
   }
   return updated;
+}
+
+export async function getPlatformCounters() {
+  if (env.dbClient === 'memory') {
+    return buildMemoryPlatformCounters();
+  }
+  const [rows] = await pool.query(
+    `SELECT users_total AS usersTotal,
+            users_active AS usersActive,
+            users_suspended AS usersSuspended,
+            users_banned AS usersBanned,
+            notifications_total AS notificationsTotal,
+            notifications_sent AS notificationsSent,
+            notifications_received AS notificationsReceived,
+            notifications_delivered AS notificationsDelivered,
+            notifications_read AS notificationsRead,
+            updated_at AS updatedAt
+     FROM platform_counters
+     WHERE id = 1
+     LIMIT 1`
+  );
+  const row = rows[0];
+  if (!row) {
+    return refreshPlatformCounters();
+  }
+  return {
+    usersTotal: Number(row.usersTotal || 0),
+    usersActive: Number(row.usersActive || 0),
+    usersSuspended: Number(row.usersSuspended || 0),
+    usersBanned: Number(row.usersBanned || 0),
+    notificationsTotal: Number(row.notificationsTotal || 0),
+    notificationsSent: Number(row.notificationsSent || 0),
+    notificationsReceived: Number(row.notificationsReceived || 0),
+    notificationsDelivered: Number(row.notificationsDelivered || 0),
+    notificationsRead: Number(row.notificationsRead || 0),
+    updatedAt: row.updatedAt || now()
+  };
+}
+
+export async function rebuildPlatformCounters(actorUserId) {
+  const counters = await refreshPlatformCounters();
+  await createAuditLogRecord({
+    entityType: 'platform_counters',
+    entityId: 1,
+    action: 'rebuild',
+    actorUserId: actorOrSystem(actorUserId),
+    beforeState: null,
+    afterState: counters
+  });
+  return counters;
 }
 
 export async function getNotificationStats({ recipientUserId = null } = {}) {
@@ -3333,6 +2929,17 @@ export async function getNotificationStats({ recipientUserId = null } = {}) {
     };
   }
 
+  if (!recipientUserId) {
+    const counters = await getPlatformCounters();
+    return {
+      total: counters.notificationsTotal,
+      sent: counters.notificationsSent,
+      received: counters.notificationsReceived,
+      delivered: counters.notificationsDelivered,
+      read: counters.notificationsRead
+    };
+  }
+
   const where = recipientUserId ? 'WHERE recipient_user_id = ?' : '';
   const params = recipientUserId ? [recipientUserId] : [];
   const [rows] = await pool.query(
@@ -3341,7 +2948,7 @@ export async function getNotificationStats({ recipientUserId = null } = {}) {
         SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,
         SUM(CASE WHEN received_at IS NOT NULL THEN 1 ELSE 0 END) AS received,
         SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) AS delivered,
-        SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END) AS read
+        SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END) AS readCount
      FROM notifications ${where}`,
     params
   );
@@ -3351,7 +2958,7 @@ export async function getNotificationStats({ recipientUserId = null } = {}) {
     sent: Number(row.sent || 0),
     received: Number(row.received || 0),
     delivered: Number(row.delivered || 0),
-    read: Number(row.read || 0)
+    read: Number(row.readCount || 0)
   };
 }
 
@@ -3574,6 +3181,21 @@ export async function createAccountActionRecord({ userId, action, source, metada
   return accountAction;
 }
 
+export async function listAccountActionsByUser(userId, limit = 100) {
+  if (env.dbClient === 'memory') {
+    return memory.accountActions.filter((a) => a.userId === userId).slice(-limit).reverse();
+  }
+  const [rows] = await pool.query(
+    `SELECT id, user_id AS userId, action, source, metadata, created_at AS createdAt
+     FROM account_actions
+     WHERE user_id = ?
+     ORDER BY created_at DESC
+     LIMIT ?`,
+    [userId, limit]
+  );
+  return rows.map((row) => ({ ...row, metadata: parseJson(row.metadata, {}) }));
+}
+
 export async function createAuditLogRecord({ entityType, entityId, action, actorUserId, beforeState, afterState }) {
   const audit = {
     id: createId(),
@@ -3603,6 +3225,7 @@ export async function resetMemoryStore() {
     const tables = [
       'messages',
       'notifications',
+      'platform_counters',
       'user_device_tokens',
       'conversations',
       'coupon_redemptions',

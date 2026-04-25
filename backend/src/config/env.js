@@ -2,13 +2,32 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const nodeEnv = process.env.NODE_ENV || 'development';
+const isProduction = nodeEnv === 'production';
+
+function getSecretEnv(name, fallback) {
+  const value = process.env[name] || fallback;
+  if (isProduction && (!value || value === fallback || String(value).toLowerCase().includes('change-me'))) {
+    throw new Error(`${name} must be set to a strong secret in production`);
+  }
+  return value;
+}
+
+function getCorsOrigin() {
+  const value = process.env.CORS_ORIGIN || 'http://localhost:3000';
+  if (isProduction && value.trim() === '*') {
+    throw new Error('CORS_ORIGIN cannot be "*" in production');
+  }
+  return value;
+}
+
 export const env = {
   port: Number(process.env.PORT || 4000),
-  nodeEnv: process.env.NODE_ENV || 'development',
-  jwtSecret: process.env.JWT_SECRET || 'dev-secret',
-  corsOrigin: process.env.CORS_ORIGIN || '*',
+  nodeEnv,
+  jwtSecret: getSecretEnv('JWT_SECRET', 'dev-secret'),
+  corsOrigin: getCorsOrigin(),
   commissionRatePercent: Number(process.env.COMMISSION_RATE_PERCENT || 20),
-  webhookSecret: process.env.WEBHOOK_SECRET || 'dev-webhook-secret',
+  webhookSecret: getSecretEnv('WEBHOOK_SECRET', 'dev-webhook-secret'),
   webhookMaxSkewSeconds: Number(process.env.WEBHOOK_MAX_SKEW_SECONDS || 300),
   enabledPaymentProviders: (process.env.ENABLED_PAYMENT_PROVIDERS || 'esewa,khalti,fonepay,connectips')
     .split(',')
@@ -32,7 +51,7 @@ export const env = {
     host: process.env.MYSQL_HOST || '127.0.0.1',
     port: Number(process.env.MYSQL_PORT || 3306),
     user: process.env.MYSQL_USER || 'ride',
-    password: process.env.MYSQL_PASSWORD || 'ride',
-    database: process.env.MYSQL_DATABASE || 'ride'
+    password: process.env.MYSQL_PASSWORD || 'root',
+    database: process.env.MYSQL_DATABASE || 'password'
   }
 };

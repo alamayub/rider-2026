@@ -1,5 +1,5 @@
 import { env } from '../config/env.js';
-import { listAdminDailyStats, listDriverDailyStats, listRiderDailyStats } from '../db/store.js';
+import { getPlatformCounters, listAdminDailyStats, listDriverDailyStats, listRiderDailyStats } from '../db/store.js';
 
 function getPeriodStart(period) {
   const now = new Date();
@@ -91,9 +91,15 @@ export async function getRiderAnalytics(riderId) {
 
 export async function getAdminAnalytics() {
   const rows = await listAdminDailyStats();
+  const counters = await getPlatformCounters();
+  const all = buildAdminPeriodStats(filterByPeriod(rows, 'statDate', 'all'));
 
   return {
     commissionRatePercent: env.commissionRatePercent,
+    counters,
+    totalRides: all.totalRides,
+    totalRevenue: all.grossBookings,
+    totalCommission: all.commissionEarned,
     periods: periodized((period) =>
       buildAdminPeriodStats(filterByPeriod(rows, 'statDate', period))
     )
