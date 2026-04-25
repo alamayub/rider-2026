@@ -3,6 +3,65 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'config.dart';
 import 'driver_api.dart';
 
+class AppNotification {
+  const AppNotification({
+    required this.title,
+    required this.body,
+    required this.createdAt,
+    this.type = 'info',
+    this.payload,
+    this.read = false,
+  });
+
+  final String title;
+  final String body;
+  final DateTime createdAt;
+  final String type;
+  final Object? payload;
+  final bool read;
+
+  AppNotification copyWith({bool? read}) {
+    return AppNotification(
+      title: title,
+      body: body,
+      createdAt: createdAt,
+      type: type,
+      payload: payload,
+      read: read ?? this.read,
+    );
+  }
+}
+
+class NotificationCenterNotifier extends StateNotifier<List<AppNotification>> {
+  NotificationCenterNotifier() : super(const <AppNotification>[]);
+
+  void push({
+    required String title,
+    required String body,
+    String type = 'info',
+    Object? payload,
+  }) {
+    state = <AppNotification>[
+      AppNotification(
+        title: title,
+        body: body,
+        type: type,
+        payload: payload,
+        createdAt: DateTime.now(),
+      ),
+      ...state,
+    ];
+  }
+
+  void markAllRead() {
+    state = state.map((n) => n.copyWith(read: true)).toList();
+  }
+
+  void clear() {
+    state = const <AppNotification>[];
+  }
+}
+
 class DriverSession {
   const DriverSession({
     required this.accessToken,
@@ -62,5 +121,13 @@ final socketProvider = Provider<io.Socket?>((ref) {
   socket.connect();
   ref.onDispose(socket.dispose);
   return socket;
+});
+
+final notificationCenterProvider = StateNotifierProvider<NotificationCenterNotifier, List<AppNotification>>((ref) {
+  return NotificationCenterNotifier();
+});
+
+final unreadNotificationCountProvider = Provider<int>((ref) {
+  return ref.watch(notificationCenterProvider).where((n) => !n.read).length;
 });
 

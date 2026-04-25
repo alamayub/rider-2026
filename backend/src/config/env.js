@@ -22,6 +22,11 @@ export const env = {
     stripe: process.env.STRIPE_BASE_URL || 'https://checkout.stripe.com',
     razorpay: process.env.RAZORPAY_BASE_URL || 'https://checkout.razorpay.com'
   },
+  fcm: {
+    enabled: String(process.env.FCM_ENABLED || 'false').toLowerCase() === 'true',
+    serverKey: process.env.FCM_SERVER_KEY || '',
+    endpoint: process.env.FCM_ENDPOINT || 'https://fcm.googleapis.com/fcm/send'
+  },
   dbClient: 'mysql',
   mysql: {
     host: process.env.MYSQL_HOST || '127.0.0.1',

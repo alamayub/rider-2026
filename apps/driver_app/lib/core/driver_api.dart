@@ -39,9 +39,36 @@ class DriverApi {
     );
   }
 
+  Future<Map<String, dynamic>> registerDeviceToken({
+    required String app,
+    required String platform,
+    required String token,
+  }) async {
+    return _map('/notifications/me/device-token', <String, dynamic>{
+      'app': app,
+      'platform': platform,
+      'token': token,
+    });
+  }
+
+  Future<List<dynamic>> listMyNotifications({int limit = 100}) =>
+      _list('/notifications/me', query: <String, dynamic>{'limit': limit});
+
+  Future<Map<String, dynamic>> getMyNotificationStats() => _getMap('/notifications/me/stats');
+
+  Future<Map<String, dynamic>> markNotificationReceived(String notificationId) =>
+      _map('/notifications/$notificationId/received', <String, dynamic>{});
+
+  Future<Map<String, dynamic>> markNotificationDelivered(String notificationId) =>
+      _map('/notifications/$notificationId/delivered', <String, dynamic>{});
+
+  Future<Map<String, dynamic>> markNotificationRead(String notificationId) =>
+      _map('/notifications/$notificationId/read', <String, dynamic>{});
+
   Future<Map<String, dynamic>> getDriverAnalytics() async => _getMap('/analytics/driver');
 
   Future<List<dynamic>> listMyRides() async => _list('/rides/me');
+  Future<Map<String, dynamic>> getRideById(String rideId) async => _getMap('/rides/$rideId');
 
   Future<Map<String, dynamic>> updateRideStatus({
     required String rideId,
@@ -124,6 +151,21 @@ class DriverApi {
       });
 
   Future<Map<String, dynamic>> getUserRatingSummary(String userId) async => _getMap('/ratings/users/$userId/summary');
+
+  Future<Map<String, dynamic>> createReport({
+    required String reportedUserId,
+    required String reason,
+    String? description,
+    String? rideId,
+  }) async =>
+      _map('/reports', <String, dynamic>{
+        'reportedUserId': reportedUserId,
+        'reason': reason,
+        if (description != null && description.isNotEmpty) 'description': description,
+        if (rideId != null && rideId.isNotEmpty) 'rideId': rideId,
+      });
+
+  Future<List<dynamic>> listMyReports() async => _list('/reports/me');
 
   Future<List<dynamic>> _list(String path, {Map<String, dynamic>? query}) async {
     final response = await _dio.get(path, queryParameters: query, options: _authOptions);

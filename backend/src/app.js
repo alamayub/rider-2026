@@ -11,6 +11,7 @@ import { couponsRouter } from './routes/coupons.routes.js';
 import { driverKycRouter } from './routes/driver-kyc.routes.js';
 import { driverVehiclesRouter } from './routes/driver-vehicles.routes.js';
 import { messagesRouter } from './routes/messages.routes.js';
+import { notificationsRouter } from './routes/notifications.routes.js';
 import { offersRouter } from './routes/offers.routes.js';
 import { paymentsRouter } from './routes/payments.routes.js';
 import { parcelsRouter } from './routes/parcels.routes.js';
@@ -35,6 +36,7 @@ export function createApp() {
   app.use('/driver-kyc', driverKycRouter);
   app.use('/driver-vehicles', driverVehiclesRouter);
   app.use('/messages', messagesRouter);
+  app.use('/notifications', notificationsRouter);
   app.use('/rides', ridesRouter);
   app.use('/coupons', couponsRouter);
   app.use('/offers', offersRouter);

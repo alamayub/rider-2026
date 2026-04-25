@@ -91,6 +91,8 @@ const memory = {
   penalties: [],
   conversations: [],
   messages: [],
+  notifications: [],
+  userDeviceTokens: [],
   vehicleTypes: vehicleTypeConfigs.map((v) => ({ ...v })),
   driverDailyStats: [],
   riderDailyStats: [],
@@ -755,6 +757,49 @@ async function migrateMySql() {
       updated_by VARCHAR(36) NOT NULL,
       KEY idx_messages_conversation (conversation_id),
       KEY idx_messages_created_at (created_at)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id VARCHAR(36) PRIMARY KEY,
+      recipient_user_id VARCHAR(36) NOT NULL,
+      type VARCHAR(64) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      body TEXT NOT NULL,
+      payload JSON NULL,
+      channel VARCHAR(32) NOT NULL,
+      status VARCHAR(24) NOT NULL,
+      sent_at DATETIME NOT NULL,
+      received_at DATETIME NULL,
+      delivered_at DATETIME NULL,
+      read_at DATETIME NULL,
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      created_by VARCHAR(36) NOT NULL,
+      updated_by VARCHAR(36) NOT NULL,
+      KEY idx_notifications_recipient (recipient_user_id),
+      KEY idx_notifications_status (status),
+      KEY idx_notifications_created_at (created_at)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_device_tokens (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      app VARCHAR(32) NOT NULL,
+      platform VARCHAR(16) NOT NULL,
+      token VARCHAR(512) NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      last_seen_at DATETIME NOT NULL,
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      created_by VARCHAR(36) NOT NULL,
+      updated_by VARCHAR(36) NOT NULL,
+      UNIQUE KEY uniq_user_device_token (user_id, token),
+      KEY idx_device_tokens_user (user_id),
+      KEY idx_device_tokens_active (is_active)
     )
   `);
 
@@ -3115,6 +3160,299 @@ export async function listParcelsByUserRole(userId, role) {
   return rows.map(normalizeParcel);
 }
 
+function normalizeNotification(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    recipientUserId: row.recipientUserId || row.recipient_user_id,
+    type: row.type,
+    title: row.title,
+    body: row.body,
+    payload: parseJson(row.payload, null),
+    channel: row.channel,
+    status: row.status,
+    sentAt: row.sentAt || row.sent_at || null,
+    receivedAt: row.receivedAt || row.received_at || null,
+    deliveredAt: row.deliveredAt || row.delivered_at || null,
+    readAt: row.readAt || row.read_at || null,
+    createdAt: row.createdAt || row.created_at,
+    updatedAt: row.updatedAt || row.updated_at
+  };
+}
+
+export async function createNotificationRecord({ recipientUserId, type, title, body, payload = null, channel = 'in_app', actorUserId }) {
+  const actorId = actorOrSystem(actorUserId);
+  const ts = now();
+  const notification = {
+    id: createId(),
+    recipientUserId,
+    type,
+    title,
+    body,
+    payload,
+    channel,
+    status: 'sent',
+    sentAt: ts,
+    receivedAt: null,
+    deliveredAt: null,
+    readAt: null,
+    createdAt: ts,
+    updatedAt: ts,
+    createdBy: actorId,
+    updatedBy: actorId
+  };
+
+  if (env.dbClient === 'memory') {
+    memory.notifications.push(notification);
+    return notification;
+  }
+
+  await pool.query(
+    `INSERT INTO notifications
+      (id, recipient_user_id, type, title, body, payload, channel, status, sent_at, received_at, delivered_at, read_at, created_at, updated_at, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      notification.id,
+      notification.recipientUserId,
+      notification.type,
+      notification.title,
+      notification.body,
+      JSON.stringify(notification.payload || {}),
+      notification.channel,
+      notification.status,
+      notification.sentAt,
+      notification.receivedAt,
+      notification.deliveredAt,
+      notification.readAt,
+      notification.createdAt,
+      notification.updatedAt,
+      notification.createdBy,
+      notification.updatedBy
+    ]
+  );
+  await createAuditLogRecord({
+    entityType: 'notification',
+    entityId: notification.id,
+    action: 'create',
+    actorUserId: actorId,
+    beforeState: null,
+    afterState: notification
+  });
+  return notification;
+}
+
+export async function findNotificationById(notificationId) {
+  if (env.dbClient === 'memory') {
+    return memory.notifications.find((n) => n.id === notificationId) || null;
+  }
+
+  const [rows] = await pool.query(
+    `SELECT id, recipient_user_id AS recipientUserId, type, title, body, payload, channel, status, sent_at AS sentAt,
+            received_at AS receivedAt, delivered_at AS deliveredAt, read_at AS readAt, created_at AS createdAt, updated_at AS updatedAt
+     FROM notifications WHERE id = ? LIMIT 1`,
+    [notificationId]
+  );
+  return normalizeNotification(rows[0]);
+}
+
+export async function listNotificationsByUser(userId, limit = 100) {
+  if (env.dbClient === 'memory') {
+    return memory.notifications.filter((n) => n.recipientUserId === userId).slice(-limit).reverse();
+  }
+
+  const [rows] = await pool.query(
+    `SELECT id, recipient_user_id AS recipientUserId, type, title, body, payload, channel, status, sent_at AS sentAt,
+            received_at AS receivedAt, delivered_at AS deliveredAt, read_at AS readAt, created_at AS createdAt, updated_at AS updatedAt
+     FROM notifications
+     WHERE recipient_user_id = ?
+     ORDER BY created_at DESC
+     LIMIT ?`,
+    [userId, limit]
+  );
+  return rows.map(normalizeNotification);
+}
+
+export async function markNotificationStatus({ notificationId, recipientUserId, status, actorUserId }) {
+  const actorId = actorOrSystem(actorUserId);
+  const ts = now();
+  const allowed = new Set(['received', 'delivered', 'read']);
+  if (!allowed.has(status)) {
+    throw new Error('Unsupported notification status');
+  }
+
+  const existing = await findNotificationById(notificationId);
+  if (!existing) return null;
+  if (existing.recipientUserId !== recipientUserId) return null;
+
+  if (env.dbClient === 'memory') {
+    const notif = memory.notifications.find((n) => n.id === notificationId && n.recipientUserId === recipientUserId);
+    if (!notif) return null;
+    notif.status = status;
+    if (status === 'received' && !notif.receivedAt) notif.receivedAt = ts;
+    if (status === 'delivered' && !notif.deliveredAt) notif.deliveredAt = ts;
+    if (status === 'read' && !notif.readAt) notif.readAt = ts;
+    notif.updatedAt = ts;
+    notif.updatedBy = actorId;
+    return notif;
+  }
+
+  await pool.query(
+    `UPDATE notifications
+     SET status = ?,
+         received_at = CASE WHEN ? = 'received' AND received_at IS NULL THEN ? ELSE received_at END,
+         delivered_at = CASE WHEN ? = 'delivered' AND delivered_at IS NULL THEN ? ELSE delivered_at END,
+         read_at = CASE WHEN ? = 'read' AND read_at IS NULL THEN ? ELSE read_at END,
+         updated_at = ?,
+         updated_by = ?
+     WHERE id = ? AND recipient_user_id = ?`,
+    [status, status, ts, status, ts, status, ts, ts, actorId, notificationId, recipientUserId]
+  );
+  const updated = await findNotificationById(notificationId);
+  if (updated) {
+    await createAuditLogRecord({
+      entityType: 'notification',
+      entityId: notificationId,
+      action: 'update',
+      actorUserId: actorId,
+      beforeState: existing,
+      afterState: updated
+    });
+  }
+  return updated;
+}
+
+export async function getNotificationStats({ recipientUserId = null } = {}) {
+  if (env.dbClient === 'memory') {
+    const rows = recipientUserId ? memory.notifications.filter((n) => n.recipientUserId === recipientUserId) : memory.notifications;
+    return {
+      total: rows.length,
+      sent: rows.filter((n) => n.status === 'sent').length,
+      received: rows.filter((n) => Boolean(n.receivedAt)).length,
+      delivered: rows.filter((n) => Boolean(n.deliveredAt)).length,
+      read: rows.filter((n) => Boolean(n.readAt)).length
+    };
+  }
+
+  const where = recipientUserId ? 'WHERE recipient_user_id = ?' : '';
+  const params = recipientUserId ? [recipientUserId] : [];
+  const [rows] = await pool.query(
+    `SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,
+        SUM(CASE WHEN received_at IS NOT NULL THEN 1 ELSE 0 END) AS received,
+        SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) AS delivered,
+        SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END) AS read
+     FROM notifications ${where}`,
+    params
+  );
+  const row = rows[0] || {};
+  return {
+    total: Number(row.total || 0),
+    sent: Number(row.sent || 0),
+    received: Number(row.received || 0),
+    delivered: Number(row.delivered || 0),
+    read: Number(row.read || 0)
+  };
+}
+
+export async function upsertUserDeviceToken({ userId, app, platform, token, actorUserId }) {
+  const actorId = actorOrSystem(actorUserId || userId);
+  const ts = now();
+  const record = {
+    id: createId(),
+    userId,
+    app,
+    platform,
+    token,
+    isActive: true,
+    lastSeenAt: ts,
+    createdAt: ts,
+    updatedAt: ts,
+    createdBy: actorId,
+    updatedBy: actorId
+  };
+
+  if (env.dbClient === 'memory') {
+    const existing = memory.userDeviceTokens.find((t) => t.userId === userId && t.token === token);
+    if (existing) {
+      existing.app = app;
+      existing.platform = platform;
+      existing.isActive = true;
+      existing.lastSeenAt = ts;
+      existing.updatedAt = ts;
+      existing.updatedBy = actorId;
+      return existing;
+    }
+    memory.userDeviceTokens.push(record);
+    return record;
+  }
+
+  const [existingRows] = await pool.query(
+    'SELECT id FROM user_device_tokens WHERE user_id = ? AND token = ? LIMIT 1',
+    [userId, token]
+  );
+  if (existingRows.length) {
+    await pool.query(
+      `UPDATE user_device_tokens
+       SET app = ?, platform = ?, is_active = true, last_seen_at = ?, updated_at = ?, updated_by = ?
+       WHERE user_id = ? AND token = ?`,
+      [app, platform, ts, ts, actorId, userId, token]
+    );
+    const [rows] = await pool.query(
+      `SELECT id, user_id AS userId, app, platform, token, is_active AS isActive, last_seen_at AS lastSeenAt, created_at AS createdAt, updated_at AS updatedAt
+       FROM user_device_tokens WHERE user_id = ? AND token = ? LIMIT 1`,
+      [userId, token]
+    );
+    return rows[0];
+  }
+
+  await pool.query(
+    `INSERT INTO user_device_tokens (id, user_id, app, platform, token, is_active, last_seen_at, created_at, updated_at, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [record.id, record.userId, record.app, record.platform, record.token, record.isActive, record.lastSeenAt, record.createdAt, record.updatedAt, record.createdBy, record.updatedBy]
+  );
+  return record;
+}
+
+export async function listActiveDeviceTokensByUser(userId) {
+  if (env.dbClient === 'memory') {
+    return memory.userDeviceTokens.filter((t) => t.userId === userId && t.isActive);
+  }
+
+  const [rows] = await pool.query(
+    `SELECT id, user_id AS userId, app, platform, token, is_active AS isActive, last_seen_at AS lastSeenAt, created_at AS createdAt, updated_at AS updatedAt
+     FROM user_device_tokens
+     WHERE user_id = ? AND is_active = true
+     ORDER BY updated_at DESC`,
+    [userId]
+  );
+  return rows;
+}
+
+export async function deactivateDeviceToken({ userId, token, actorUserId }) {
+  const actorId = actorOrSystem(actorUserId || userId);
+  const ts = now();
+  if (env.dbClient === 'memory') {
+    const existing = memory.userDeviceTokens.find((t) => t.userId === userId && t.token === token);
+    if (!existing) return null;
+    existing.isActive = false;
+    existing.updatedAt = ts;
+    existing.updatedBy = actorId;
+    return existing;
+  }
+
+  await pool.query(
+    'UPDATE user_device_tokens SET is_active = false, updated_at = ?, updated_by = ? WHERE user_id = ? AND token = ?',
+    [ts, actorId, userId, token]
+  );
+  const [rows] = await pool.query(
+    `SELECT id, user_id AS userId, app, platform, token, is_active AS isActive, last_seen_at AS lastSeenAt, created_at AS createdAt, updated_at AS updatedAt
+     FROM user_device_tokens WHERE user_id = ? AND token = ? LIMIT 1`,
+    [userId, token]
+  );
+  return rows[0] || null;
+}
+
 export async function createReportRecord({ rideId, reporterUserId, reportedUserId, reason, description, actorUserId }) {
   const actorId = actorOrSystem(actorUserId || reporterUserId);
   const ts = now();
@@ -3264,6 +3602,8 @@ export async function resetMemoryStore() {
   if (env.dbClient === 'mysql' && pool) {
     const tables = [
       'messages',
+      'notifications',
+      'user_device_tokens',
       'conversations',
       'coupon_redemptions',
       'offers',
@@ -3324,6 +3664,8 @@ export async function resetMemoryStore() {
   memory.penalties = [];
   memory.conversations = [];
   memory.messages = [];
+  memory.notifications = [];
+  memory.userDeviceTokens = [];
   memory.vehicleTypes = vehicleTypeConfigs.map((v) => ({ ...v }));
   memory.reports = [];
   memory.accountActions = [];

@@ -1,6 +1,6 @@
 # Ride App Features
 
-Centralized overview of all implemented and planned product features for the ride-hailing platform.
+Centralized overview of implemented product features for the ride-hailing platform.
 
 ## Feature Groups
 - Rider features
@@ -13,29 +13,37 @@ Centralized overview of all implemented and planned product features for the rid
 
 ## Rider Features
 ### Account and profile
-- Phone-based sign-in with optional email field
+- Phone-based sign-in with required phone and optional email
+- Password and OTP sign-in support
 - Role-based auth session (rider)
 - Profile basics and account status handling
 
 ### Ride booking and trip lifecycle
 - Fare estimate by city and distance
 - Create ride request with pickup/drop points
+- Vehicle-type aware booking and pricing
+- Ride start OTP verification support
 - View ride status and trip history
+- Ride detail lookup by id
 - Cancelled/completed state handling
 
 ### Real-time experience
 - Live driver location updates via Socket.IO
 - Ride room subscription support for trip updates
+- Rider <-> Driver/Admin chat messaging (conversation + messages)
 
 ### Payments and pricing
-- Payment intent creation and webhook status update flow
+- Payment intent creation and status update flow
+- Payment timeline/history visibility
 - Coupon validation and coupon application support
 - Discount-aware final fare handling
+- App-filtered payment methods listing
 
 ### Ratings and feedback
 - Rider can rate driver after completed trip
 - One directional rating per ride per user pair
-- Received ratings listing endpoint
+- Received ratings listing and aggregate summary
+- Driver summary lookup (privacy-safe fields)
 
 ### Safety and accountability
 - Report driver/user from authenticated account
@@ -49,9 +57,11 @@ Centralized overview of all implemented and planned product features for the rid
 
 ## Driver Features
 ### Account and profile
-- Phone-based sign-in with optional email field
+- Phone-based sign-in with required phone and optional email
+- Password and OTP sign-in support
 - Role-based auth session (driver)
 - Status-aware account access (active/suspended/banned)
+- Driver KYC submit and status view
 
 ### Availability and dispatch
 - Live location upsert events
@@ -60,17 +70,23 @@ Centralized overview of all implemented and planned product features for the rid
 
 ### Trip operations
 - Ride status transitions through API
+- Ride start OTP verification support
 - Assigned/completed/cancelled ride visibility
+- Ride detail lookup by id
 
 ### Earnings and deductions
 - Gross fare tracking per trip
 - Commission computation against configurable rate
 - Penalty handling support
 - Net earnings calculation
+- Payout ledger visibility via admin reconciliation flows
 
 ### Ratings and trust
 - Driver can rate rider after completed trip
 - Duplicate directional ratings blocked
+- Received ratings listing and aggregate summary
+- Rider summary lookup (privacy-safe fields)
+- Report rider/user and view own reports
 
 ### Driver analytics dashboard
 - Daily/weekly/monthly/yearly/all-time stats
@@ -80,14 +96,18 @@ Centralized overview of all implemented and planned product features for the rid
 ## Admin Features
 ### Operations and controls
 - City listing and city creation
+- Vehicle type listing and creation
 - Live rides monitoring endpoint
 - System-wide reports listing endpoint
 - Audit logs listing endpoint
+- Ride and parcel detail lookup by id
 
 ### Trust and safety
 - Full report visibility for admin
 - Automatic suspension and ban triggers from report thresholds
 - Account action records for moderation events
+- Driver KYC queue review (approve/reject)
+- Admin report submission and personal report history views
 
 ### Promotions and campaigns
 - Create and list coupons
@@ -96,6 +116,8 @@ Centralized overview of all implemented and planned product features for the rid
 ### Financial and policy controls
 - Commission rate configuration via environment
 - Penalty model integrated in analytics data flow
+- Payment status updates, refunds, payouts, and reconciliation tools
+- Payment method upsert and grouped listing
 
 ### Admin analytics dashboard
 - Daily/weekly/monthly/yearly/all-time stats
@@ -111,11 +133,13 @@ Centralized overview of all implemented and planned product features for the rid
 ### Realtime infrastructure
 - Socket.IO server for driver location streaming
 - Event broadcast for live location updates
+- Socket-authenticated conversation messaging events
 
 ### Data and persistence
 - MySQL-backed persistence layer
 - Redis-ready local infra setup
 - SQL bootstrap schema for all core entities
+- MySQL-backed tests with fixture reset/reseed flow
 
 ### Auditing and governance
 - Entity-level audit logs with before/after snapshots
@@ -160,6 +184,19 @@ Centralized overview of all implemented and planned product features for the rid
   - Penalty creation
 - Period dashboards computed from aggregates (not full raw scans)
 
+## Notifications Features
+- Backend `notifications` and `user_device_tokens` tables
+- Notification lifecycle tracking: sent, received, delivered, read
+- User-level and global notification stats endpoints
+- Admin send-notification endpoint
+- FCM push dispatch integration and dead-token deactivation
+- Flutter app integration in all apps:
+  - FCM token registration to backend
+  - Foreground/background handling
+  - OS-level local banners via `flutter_local_notifications`
+  - Notification tap deep-link handling by payload `type`
+- Android manifests configured with default FCM channel IDs per app
+
 ## Current Core Tables
 - `users`
 - `cities`
@@ -168,6 +205,7 @@ Centralized overview of all implemented and planned product features for the rid
 - `driver_locations`
 - `payments`
 - `ratings`
+- `user_rating_stats`
 - `reports`
 - `account_actions`
 - `audit_logs`
@@ -175,6 +213,20 @@ Centralized overview of all implemented and planned product features for the rid
 - `offers`
 - `coupon_redemptions`
 - `penalties`
+- `vehicle_types`
+- `driver_vehicles`
+- `driver_kyc`
+- `parcels`
+- `parcel_events`
+- `messages`
+- `conversations`
+- `payment_events`
+- `payment_refunds`
+- `payment_webhooks`
+- `payout_ledger`
+- `payment_methods`
+- `notifications`
+- `user_device_tokens`
 - `driver_daily_stats`
 - `rider_daily_stats`
 - `admin_daily_stats`

@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../core/admin_api.dart';
+import '../../core/local_notifications.dart';
 import '../../core/providers.dart';
 
 class AdminHomePage extends HookConsumerWidget {
@@ -13,12 +16,159 @@ class AdminHomePage extends HookConsumerWidget {
     final tab = useState(0);
     final api = ref.watch(adminApiProvider);
     final session = ref.watch(sessionProvider)!;
+    final socket = ref.watch(socketProvider);
+    final unreadCount = ref.watch(unreadNotificationCountProvider);
+    final notifications = ref.watch(notificationCenterProvider);
+
+    useEffect(() {
+      void onMessage(dynamic payload) {
+        ref.read(notificationCenterProvider.notifier).push(
+              title: 'New Message',
+              body: 'You received a new message',
+              type: 'message',
+              payload: payload,
+            );
+      }
+
+      void onDriverLocation(dynamic payload) {
+        ref.read(notificationCenterProvider.notifier).push(
+              title: 'Driver Location Update',
+              body: 'A driver location was updated',
+              type: 'location',
+              payload: payload,
+            );
+      }
+
+      socket?.on('message:new', onMessage);
+      socket?.on('driver:location:updated', onDriverLocation);
+      return () {
+        socket?.off('message:new', onMessage);
+        socket?.off('driver:location:updated', onDriverLocation);
+      };
+    }, <Object?>[socket]);
+
+    useEffect(() {
+      Future<void> bootstrapFcm() async {
+        final messaging = FirebaseMessaging.instance;
+        await messaging.requestPermission(alert: true, badge: true, sound: true);
+        final token = await messaging.getToken();
+        if (token != null && token.isNotEmpty) {
+          await api.registerDeviceToken(
+            app: 'admin',
+            platform: Platform.isIOS ? 'ios' : 'android',
+            token: token,
+          );
+          ref.read(notificationCenterProvider.notifier).push(
+                title: 'FCM Ready',
+                body: 'Device token registered to backend',
+                type: 'fcm',
+                payload: token,
+              );
+        }
+
+        FirebaseMessaging.instance.onTokenRefresh.listen((nextToken) async {
+          if (nextToken.isEmpty) return;
+          await api.registerDeviceToken(
+            app: 'admin',
+            platform: Platform.isIOS ? 'ios' : 'android',
+            token: nextToken,
+          );
+          ref.read(notificationCenterProvider.notifier).push(
+                title: 'FCM Token Refreshed',
+                body: 'Updated token registered to backend',
+                type: 'fcm',
+                payload: nextToken,
+              );
+        });
+      }
+
+      bootstrapFcm();
+
+      final subMessage = FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        final title = message.notification?.title ?? 'Push notification';
+        final body = message.notification?.body ?? (message.data.isEmpty ? 'No body' : message.data.toString());
+        LocalNotificationsService.showFromRemoteMessage(message);
+        final notificationId = (message.data['notificationId'] ?? '').toString();
+        if (notificationId.isNotEmpty) {
+          () async {
+            try {
+              await api.markNotificationReceived(notificationId);
+              await api.markNotificationDelivered(notificationId);
+            } catch (_) {
+              // best-effort ack
+            }
+          }();
+        }
+        ref.read(notificationCenterProvider.notifier).push(
+              title: title,
+              body: body,
+              type: 'push',
+              payload: message.data,
+            );
+      });
+
+      final subOpen = FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        final title = message.notification?.title ?? 'Opened from notification';
+        final body = message.notification?.body ?? 'Notification tap event';
+        final notificationId = (message.data['notificationId'] ?? '').toString();
+        if (notificationId.isNotEmpty) {
+          () async {
+            try {
+              await api.markNotificationRead(notificationId);
+            } catch (_) {
+              // best-effort ack
+            }
+          }();
+        }
+        ref.read(notificationCenterProvider.notifier).push(
+              title: title,
+              body: body,
+              type: 'push-open',
+              payload: message.data,
+            );
+      });
+
+      return () {
+        subMessage.cancel();
+        subOpen.cancel();
+      };
+    }, const <Object?>[]);
+
+    useEffect(() {
+      final sub = LocalNotificationsService.onNotificationTap.listen((payload) {
+        final type = (payload['type'] ?? payload['eventType'] ?? '').toString().toLowerCase();
+        final keys = payload.keys.map((k) => k.toLowerCase()).toSet();
+        final valuesJoined = payload.values.map((v) => v.toString().toLowerCase()).join(' ');
+
+        if (type == 'message' || type == 'chat' || type == 'push-message') {
+          tab.value = 5;
+        } else if (type == 'payment' || type == 'refund' || type == 'payout') {
+          tab.value = 3;
+        } else if (type == 'report' || type == 'kyc' || type == 'safety') {
+          tab.value = 2;
+        } else if (type == 'city' || type == 'vehicle' || type == 'ops') {
+          tab.value = 1;
+        } else if (keys.contains('conversationid') || keys.contains('messageid') || valuesJoined.contains('message')) {
+          tab.value = 5;
+        } else if (keys.contains('paymentid') || valuesJoined.contains('payment')) {
+          tab.value = 3;
+        } else if (keys.contains('reportid') || keys.contains('kycid') || valuesJoined.contains('kyc') || valuesJoined.contains('report')) {
+          tab.value = 2;
+        } else if (keys.contains('cityid') || keys.contains('vehicletypeid') || valuesJoined.contains('vehicle')) {
+          tab.value = 1;
+        } else {
+          tab.value = 0;
+        }
+      });
+      return sub.cancel;
+    }, const <Object?>[]);
 
     final pages = <Widget>[
       _OverviewTab(api: api),
       _CitiesVehiclesTab(api: api),
       _TrustSafetyTab(api: api),
       _PaymentsTab(api: api),
+      _NotificationsOpsTab(api: api),
       _MessagesTab(api: api, selfUserId: session.userId),
     ];
 
@@ -28,6 +178,12 @@ class AdminHomePage extends HookConsumerWidget {
         actions: <Widget>[
           Center(child: Text('Admin: ${session.phone}', style: const TextStyle(fontSize: 13))),
           const SizedBox(width: 12),
+          _NotificationsButton(
+            unreadCount: unreadCount,
+            notifications: notifications,
+            onMarkAllRead: () => ref.read(notificationCenterProvider.notifier).markAllRead(),
+            onClear: () => ref.read(notificationCenterProvider.notifier).clear(),
+          ),
           IconButton(
             onPressed: () => ref.read(sessionProvider.notifier).signOut(),
             icon: const Icon(Icons.logout),
@@ -43,6 +199,7 @@ class AdminHomePage extends HookConsumerWidget {
           NavigationDestination(icon: Icon(Icons.location_city), label: 'Ops'),
           NavigationDestination(icon: Icon(Icons.verified_user), label: 'Safety'),
           NavigationDestination(icon: Icon(Icons.payments), label: 'Payments'),
+          NavigationDestination(icon: Icon(Icons.notifications_active), label: 'Notify'),
           NavigationDestination(icon: Icon(Icons.chat), label: 'Messages'),
         ],
       ),
@@ -243,12 +400,22 @@ class _TrustSafetyTab extends HookWidget {
     final ratingUserIdController = useTextEditingController();
     final ratingSummary = useState<Map<String, dynamic>?>(null);
     final ratingError = useState<String?>(null);
+    final reportUserIdController = useTextEditingController();
+    final reportRideIdController = useTextEditingController();
+    final reportReasonController = useTextEditingController(text: 'policy_violation');
+    final reportDescriptionController = useTextEditingController();
+    final myReportActionResult = useState<Object?>(null);
+    final lookupRideIdController = useTextEditingController();
+    final lookupParcelIdController = useTextEditingController();
+    final lookupRideResult = useState<Object?>(null);
+    final lookupParcelResult = useState<Object?>(null);
     final version = useState(0);
 
     final future = useMemoized(
       () => Future.wait<dynamic>(<Future<dynamic>>[
         api.getReports(),
         api.listDriverKyc(status: selectedStatus.value.isEmpty ? null : selectedStatus.value),
+        api.listMyReports(),
       ]),
       <Object?>[version.value, selectedStatus.value],
     );
@@ -258,6 +425,7 @@ class _TrustSafetyTab extends HookWidget {
 
     final reports = snapshot.data?[0] as List<dynamic>? ?? <dynamic>[];
     final kyc = snapshot.data?[1] as List<dynamic>? ?? <dynamic>[];
+    final myReports = snapshot.data?[2] as List<dynamic>? ?? <dynamic>[];
     final filteredReports = reports.where((dynamic item) {
       final map = Map<String, dynamic>.from(item as Map);
       final userFilter = reportUserFilter.text.trim();
@@ -281,6 +449,47 @@ class _TrustSafetyTab extends HookWidget {
         rejectionReason: rejectionController.text.trim(),
       );
       version.value++;
+    }
+
+    Future<void> submitMyReport() async {
+      final userId = reportUserIdController.text.trim();
+      if (userId.isEmpty) return;
+      ratingError.value = null;
+      try {
+        myReportActionResult.value = await api.createReport(
+          reportedUserId: userId,
+          reason: reportReasonController.text.trim(),
+          description: reportDescriptionController.text.trim(),
+          rideId: reportRideIdController.text.trim(),
+        );
+        version.value++;
+      } catch (e) {
+        ratingError.value = e.toString();
+      }
+    }
+
+    Future<void> lookupRide() async {
+      final id = lookupRideIdController.text.trim();
+      if (id.isEmpty) return;
+      ratingError.value = null;
+      try {
+        lookupRideResult.value = await api.getRideById(id);
+      } catch (e) {
+        lookupRideResult.value = null;
+        ratingError.value = e.toString();
+      }
+    }
+
+    Future<void> lookupParcel() async {
+      final id = lookupParcelIdController.text.trim();
+      if (id.isEmpty) return;
+      ratingError.value = null;
+      try {
+        lookupParcelResult.value = await api.getParcelById(id);
+      } catch (e) {
+        lookupParcelResult.value = null;
+        ratingError.value = e.toString();
+      }
     }
 
     return ListView(
@@ -379,6 +588,57 @@ class _TrustSafetyTab extends HookWidget {
             child: Text(ratingError.value!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         if (ratingSummary.value != null) _JsonPanel(title: 'Rating Summary', data: ratingSummary.value),
+        const Divider(height: 28),
+        const Text('My Report Actions', style: TextStyle(fontWeight: FontWeight.bold)),
+        TextField(
+          controller: reportUserIdController,
+          decoration: const InputDecoration(labelText: 'Reported user id'),
+        ),
+        TextField(
+          controller: reportRideIdController,
+          decoration: const InputDecoration(labelText: 'Ride id (optional)'),
+        ),
+        TextField(
+          controller: reportReasonController,
+          decoration: const InputDecoration(labelText: 'Reason'),
+        ),
+        TextField(
+          controller: reportDescriptionController,
+          decoration: const InputDecoration(labelText: 'Description'),
+        ),
+        const SizedBox(height: 8),
+        ElevatedButton(onPressed: submitMyReport, child: const Text('Submit Report')),
+        if (myReportActionResult.value != null) _JsonPanel(title: 'Report Submit Result', data: myReportActionResult.value),
+        _JsonPanel(title: 'My Reports', data: myReports),
+        const Divider(height: 28),
+        const Text('Ride/Parcel Lookup', style: TextStyle(fontWeight: FontWeight.bold)),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: TextField(
+                controller: lookupRideIdController,
+                decoration: const InputDecoration(labelText: 'Ride id'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton(onPressed: lookupRide, child: const Text('Fetch Ride')),
+          ],
+        ),
+        if (lookupRideResult.value != null) _JsonPanel(title: 'Ride Detail', data: lookupRideResult.value),
+        const SizedBox(height: 8),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: TextField(
+                controller: lookupParcelIdController,
+                decoration: const InputDecoration(labelText: 'Parcel id'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton(onPressed: lookupParcel, child: const Text('Fetch Parcel')),
+          ],
+        ),
+        if (lookupParcelResult.value != null) _JsonPanel(title: 'Parcel Detail', data: lookupParcelResult.value),
       ],
     );
   }
@@ -769,6 +1029,93 @@ class _MessagesTab extends HookConsumerWidget {
   }
 }
 
+class _NotificationsOpsTab extends HookWidget {
+  const _NotificationsOpsTab({required this.api});
+  final AdminApi api;
+
+  @override
+  Widget build(BuildContext context) {
+    final recipientUserId = useTextEditingController();
+    final type = useTextEditingController(text: 'message');
+    final title = useTextEditingController();
+    final body = useTextEditingController();
+    final channel = useTextEditingController(text: 'push');
+    final payloadRaw = useTextEditingController(text: '{"type":"message"}');
+    final result = useState<Object?>(null);
+    final error = useState<String?>(null);
+    final refresh = useState(0);
+
+    final future = useMemoized(
+      () => Future.wait<dynamic>(<Future<dynamic>>[
+        api.getAdminNotificationStats(),
+        api.getMyNotificationStats(),
+        api.listMyNotifications(limit: 100),
+      ]),
+      <Object?>[refresh.value],
+    );
+    final snapshot = useFuture(future);
+    if (snapshot.connectionState != ConnectionState.done) return const Center(child: CircularProgressIndicator());
+    if (snapshot.hasError) return _ErrorView(error: snapshot.error);
+
+    final globalStats = snapshot.data?[0] as Map<String, dynamic>? ?? <String, dynamic>{};
+    final myStats = snapshot.data?[1] as Map<String, dynamic>? ?? <String, dynamic>{};
+    final myNotifications = snapshot.data?[2] as List<dynamic>? ?? <dynamic>[];
+
+    Future<void> send() async {
+      error.value = null;
+      try {
+        Map<String, dynamic>? payload;
+        final raw = payloadRaw.text.trim();
+        if (raw.isNotEmpty) {
+          final decoded = jsonDecode(raw);
+          if (decoded is Map<String, dynamic>) payload = decoded;
+        }
+        result.value = await api.sendAdminNotification(
+          recipientUserId: recipientUserId.text.trim(),
+          type: type.text.trim(),
+          title: title.text.trim(),
+          body: body.text.trim(),
+          channel: channel.text.trim().isEmpty ? 'push' : channel.text.trim(),
+          payload: payload,
+        );
+        refresh.value++;
+      } catch (e) {
+        error.value = e.toString();
+      }
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        _JsonPanel(title: 'Global Notification Stats', data: globalStats),
+        _JsonPanel(title: 'My Notification Stats', data: myStats),
+        const Divider(height: 28),
+        const Text('Send Notification', style: TextStyle(fontWeight: FontWeight.bold)),
+        TextField(controller: recipientUserId, decoration: const InputDecoration(labelText: 'Recipient user id')),
+        TextField(controller: type, decoration: const InputDecoration(labelText: 'Type (message/payment/...)')),
+        TextField(controller: title, decoration: const InputDecoration(labelText: 'Title')),
+        TextField(controller: body, decoration: const InputDecoration(labelText: 'Body')),
+        TextField(controller: channel, decoration: const InputDecoration(labelText: 'Channel (push/in_app)')),
+        TextField(
+          controller: payloadRaw,
+          maxLines: 4,
+          decoration: const InputDecoration(labelText: 'Payload JSON'),
+        ),
+        const SizedBox(height: 8),
+        ElevatedButton(onPressed: send, child: const Text('Send Notification')),
+        if (error.value != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(error.value!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        if (result.value != null) _JsonPanel(title: 'Send Result', data: result.value),
+        const Divider(height: 28),
+        _JsonPanel(title: 'My Notifications (server)', data: myNotifications),
+      ],
+    );
+  }
+}
+
 class _StatCard extends StatelessWidget {
   const _StatCard({required this.title, required this.value});
   final String title;
@@ -834,6 +1181,74 @@ class _ErrorView extends StatelessWidget {
           error?.toString() ?? 'Unknown error',
           style: TextStyle(color: Theme.of(context).colorScheme.error),
         ),
+      ),
+    );
+  }
+}
+
+class _NotificationsButton extends StatelessWidget {
+  const _NotificationsButton({
+    required this.unreadCount,
+    required this.notifications,
+    required this.onMarkAllRead,
+    required this.onClear,
+  });
+
+  final int unreadCount;
+  final List<AppNotification> notifications;
+  final VoidCallback onMarkAllRead;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: () {
+        showModalBottomSheet<void>(
+          context: context,
+          builder: (context) {
+            return SafeArea(
+              child: Column(
+                children: <Widget>[
+                  ListTile(
+                    title: const Text('Notifications'),
+                    subtitle: Text('${notifications.length} total, $unreadCount unread'),
+                    trailing: Wrap(
+                      spacing: 8,
+                      children: <Widget>[
+                        TextButton(onPressed: onMarkAllRead, child: const Text('Mark all read')),
+                        TextButton(onPressed: onClear, child: const Text('Clear')),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: notifications.isEmpty
+                        ? const Center(child: Text('No notifications yet'))
+                        : ListView.builder(
+                            itemCount: notifications.length,
+                            itemBuilder: (context, index) {
+                              final item = notifications[index];
+                              return ListTile(
+                                leading: Icon(
+                                  item.read ? Icons.notifications_none : Icons.notifications_active,
+                                ),
+                                title: Text(item.title),
+                                subtitle: Text('${item.body}\n${item.createdAt.toLocal()}'),
+                                isThreeLine: true,
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+      icon: Badge(
+        isLabelVisible: unreadCount > 0,
+        label: Text('$unreadCount'),
+        child: const Icon(Icons.notifications),
       ),
     );
   }

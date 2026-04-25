@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import '../../core/local_notifications.dart';
 import '../../core/providers.dart';
 import '../../core/rider_api.dart';
 
@@ -13,6 +16,156 @@ class RiderHomePage extends HookConsumerWidget {
     final tab = useState(0);
     final session = ref.watch(sessionProvider)!;
     final api = ref.watch(riderApiProvider);
+    final socket = ref.watch(socketProvider);
+    final unreadCount = ref.watch(unreadNotificationCountProvider);
+    final notifications = ref.watch(notificationCenterProvider);
+
+    useEffect(() {
+      void onMessage(dynamic payload) {
+        ref.read(notificationCenterProvider.notifier).push(
+              title: 'New Message',
+              body: 'You received a new chat message',
+              type: 'message',
+              payload: payload,
+            );
+      }
+
+      void onLocation(dynamic payload) {
+        ref.read(notificationCenterProvider.notifier).push(
+              title: 'Nearby Driver Update',
+              body: 'Driver movement update received',
+              type: 'tracking',
+              payload: payload,
+            );
+      }
+
+      socket?.on('message:new', onMessage);
+      socket?.on('driver:location:updated', onLocation);
+      return () {
+        socket?.off('message:new', onMessage);
+        socket?.off('driver:location:updated', onLocation);
+      };
+    }, <Object?>[socket]);
+
+    useEffect(() {
+      Future<void> bootstrapFcm() async {
+        final messaging = FirebaseMessaging.instance;
+        await messaging.requestPermission(alert: true, badge: true, sound: true);
+        final token = await messaging.getToken();
+        if (token != null && token.isNotEmpty) {
+          await api.registerDeviceToken(
+            app: 'rider',
+            platform: Platform.isIOS ? 'ios' : 'android',
+            token: token,
+          );
+          ref.read(notificationCenterProvider.notifier).push(
+                title: 'FCM Ready',
+                body: 'Device token registered to backend',
+                type: 'fcm',
+                payload: token,
+              );
+        }
+
+        FirebaseMessaging.instance.onTokenRefresh.listen((nextToken) async {
+          if (nextToken.isEmpty) return;
+          await api.registerDeviceToken(
+            app: 'rider',
+            platform: Platform.isIOS ? 'ios' : 'android',
+            token: nextToken,
+          );
+          ref.read(notificationCenterProvider.notifier).push(
+                title: 'FCM Token Refreshed',
+                body: 'Updated token registered to backend',
+                type: 'fcm',
+                payload: nextToken,
+              );
+        });
+      }
+
+      bootstrapFcm();
+
+      final subMessage = FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        final title = message.notification?.title ?? 'Push notification';
+        final body = message.notification?.body ?? (message.data.isEmpty ? 'No body' : message.data.toString());
+        LocalNotificationsService.showFromRemoteMessage(message);
+        final notificationId = (message.data['notificationId'] ?? '').toString();
+        if (notificationId.isNotEmpty) {
+          () async {
+            try {
+              await api.markNotificationReceived(notificationId);
+              await api.markNotificationDelivered(notificationId);
+            } catch (_) {
+              // best-effort ack
+            }
+          }();
+        }
+        ref.read(notificationCenterProvider.notifier).push(
+              title: title,
+              body: body,
+              type: 'push',
+              payload: message.data,
+            );
+      });
+
+      final subOpen = FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        final title = message.notification?.title ?? 'Opened from notification';
+        final body = message.notification?.body ?? 'Notification tap event';
+        final notificationId = (message.data['notificationId'] ?? '').toString();
+        if (notificationId.isNotEmpty) {
+          () async {
+            try {
+              await api.markNotificationRead(notificationId);
+            } catch (_) {
+              // best-effort ack
+            }
+          }();
+        }
+        ref.read(notificationCenterProvider.notifier).push(
+              title: title,
+              body: body,
+              type: 'push-open',
+              payload: message.data,
+            );
+      });
+
+      return () {
+        subMessage.cancel();
+        subOpen.cancel();
+      };
+    }, const <Object?>[]);
+
+    useEffect(() {
+      final sub = LocalNotificationsService.onNotificationTap.listen((payload) {
+        final type = (payload['type'] ?? payload['eventType'] ?? '').toString().toLowerCase();
+        final keys = payload.keys.map((k) => k.toLowerCase()).toSet();
+        final valuesJoined = payload.values.map((v) => v.toString().toLowerCase()).join(' ');
+
+        if (type == 'message' || type == 'chat' || type == 'push-message') {
+          tab.value = 4;
+        } else if (type == 'parcel' || type == 'delivery') {
+          tab.value = 2;
+        } else if (type == 'payment' || type == 'refund') {
+          tab.value = 3;
+        } else if (type == 'ride' || type == 'trip') {
+          tab.value = 1;
+        } else if (type == 'rating' || type == 'review') {
+          tab.value = 4;
+        } else if (keys.contains('conversationid') || keys.contains('messageid') || valuesJoined.contains('message')) {
+          tab.value = 4;
+        } else if (keys.contains('parcelid') || valuesJoined.contains('parcel')) {
+          tab.value = 2;
+        } else if (keys.contains('paymentid') || valuesJoined.contains('payment')) {
+          tab.value = 3;
+        } else if (keys.contains('rideid') || valuesJoined.contains('ride')) {
+          tab.value = 1;
+        } else if (valuesJoined.contains('rating')) {
+          tab.value = 4;
+        } else {
+          tab.value = 0;
+        }
+      });
+      return sub.cancel;
+    }, const <Object?>[]);
     final pages = <Widget>[
       _OverviewTab(api: api),
       _RidesTab(api: api),
@@ -27,6 +180,12 @@ class RiderHomePage extends HookConsumerWidget {
         actions: <Widget>[
           Center(child: Text('Rider: ${session.phone}', style: const TextStyle(fontSize: 13))),
           const SizedBox(width: 8),
+          _NotificationsButton(
+            unreadCount: unreadCount,
+            notifications: notifications,
+            onMarkAllRead: () => ref.read(notificationCenterProvider.notifier).markAllRead(),
+            onClear: () => ref.read(notificationCenterProvider.notifier).clear(),
+          ),
           IconButton(onPressed: () => ref.read(sessionProvider.notifier).signOut(), icon: const Icon(Icons.logout)),
         ],
       ),
@@ -107,6 +266,7 @@ class _RidesTab extends HookWidget {
     final estimatedFare = useState<double>(0);
     final couponResult = useState<Object?>(null);
     final createResult = useState<Object?>(null);
+    final rideDetail = useState<Object?>(null);
     final error = useState<String?>(null);
     final refresh = useState(0);
 
@@ -182,6 +342,17 @@ class _RidesTab extends HookWidget {
       }
     }
 
+    Future<void> getRideDetail() async {
+      final rideId = rideIdController.text.trim();
+      if (rideId.isEmpty) return;
+      error.value = null;
+      try {
+        rideDetail.value = await api.getRideById(rideId);
+      } catch (e) {
+        error.value = e.toString();
+      }
+    }
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
@@ -215,9 +386,11 @@ class _RidesTab extends HookWidget {
           children: <Widget>[
             ElevatedButton(onPressed: validateCoupon, child: const Text('Validate Coupon')),
             OutlinedButton(onPressed: applyCoupon, child: const Text('Apply Coupon')),
+            OutlinedButton(onPressed: getRideDetail, child: const Text('Get Ride Detail')),
           ],
         ),
         if (couponResult.value != null) _JsonPanel(title: 'Coupon Result', data: couponResult.value),
+        if (rideDetail.value != null) _JsonPanel(title: 'Ride Detail', data: rideDetail.value),
         if (createResult.value != null) _JsonPanel(title: 'Create Ride Result', data: createResult.value),
         if (error.value != null) Text(error.value!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
         _JsonPanel(title: 'My Rides', data: rides),
@@ -248,6 +421,7 @@ class _ParcelsTab extends HookWidget {
     final status = useTextEditingController(text: 'picked_up');
     final estimateResult = useState<Object?>(null);
     final createResult = useState<Object?>(null);
+    final parcelDetail = useState<Object?>(null);
     final error = useState<String?>(null);
     final refresh = useState(0);
 
@@ -308,6 +482,17 @@ class _ParcelsTab extends HookWidget {
       }
     }
 
+    Future<void> getParcelDetail() async {
+      final id = parcelId.text.trim();
+      if (id.isEmpty) return;
+      error.value = null;
+      try {
+        parcelDetail.value = await api.getParcelById(id);
+      } catch (e) {
+        error.value = e.toString();
+      }
+    }
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
@@ -341,9 +526,16 @@ class _ParcelsTab extends HookWidget {
         TextField(controller: status, decoration: const InputDecoration(labelText: 'Status (picked_up/delivered/...)')),
         TextField(controller: otp, decoration: const InputDecoration(labelText: 'OTP (for pickup/drop)')),
         const SizedBox(height: 8),
-        ElevatedButton(onPressed: updateStatus, child: const Text('Update Parcel Status')),
+        Wrap(
+          spacing: 8,
+          children: <Widget>[
+            ElevatedButton(onPressed: updateStatus, child: const Text('Update Parcel Status')),
+            OutlinedButton(onPressed: getParcelDetail, child: const Text('Get Parcel Detail')),
+          ],
+        ),
         if (estimateResult.value != null) _JsonPanel(title: 'Parcel Estimate', data: estimateResult.value),
         if (createResult.value != null) _JsonPanel(title: 'Parcel Action Result', data: createResult.value),
+        if (parcelDetail.value != null) _JsonPanel(title: 'Parcel Detail', data: parcelDetail.value),
         if (error.value != null) Text(error.value!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
         _JsonPanel(title: 'My Parcels', data: parcels),
       ],
@@ -450,6 +642,10 @@ class _MessagesRatingsTab extends HookConsumerWidget {
     final score = useTextEditingController(text: '5');
     final comment = useTextEditingController();
     final lookupUser = useTextEditingController();
+    final reportUser = useTextEditingController();
+    final reportReason = useTextEditingController(text: 'driver_behaviour');
+    final reportDescription = useTextEditingController();
+    final reportRideId = useTextEditingController();
     final lookupResult = useState<Object?>(null);
     final ratingResult = useState<Object?>(null);
     final error = useState<String?>(null);
@@ -481,9 +677,13 @@ class _MessagesRatingsTab extends HookConsumerWidget {
       return api.listMessages(id);
     }, <Object?>[conversationId.value, refresh.value]);
     final msgSnap = useFuture(msgFuture);
+    final myNotificationsFuture = useMemoized(() => api.listMyNotifications(limit: 100), <Object?>[refresh.value]);
+    final myNotificationsSnap = useFuture(myNotificationsFuture);
+    final myNotificationStatsFuture = useMemoized(() => api.getMyNotificationStats(), <Object?>[refresh.value]);
+    final myNotificationStatsSnap = useFuture(myNotificationStatsFuture);
 
     final ratingsFuture = useMemoized(
-      () => Future.wait<dynamic>(<Future<dynamic>>[api.getMyRatingSummary(), api.listMyRatings()]),
+      () => Future.wait<dynamic>(<Future<dynamic>>[api.getMyRatingSummary(), api.listMyRatings(), api.listMyReports()]),
       <Object?>[refresh.value],
     );
     final ratingsSnap = useFuture(ratingsFuture);
@@ -533,6 +733,22 @@ class _MessagesRatingsTab extends HookConsumerWidget {
 
     final mySummary = ratingsSnap.data?[0] as Map<String, dynamic>? ?? <String, dynamic>{};
     final myRatings = ratingsSnap.data?[1] as List<dynamic>? ?? <dynamic>[];
+    final myReports = ratingsSnap.data?[2] as List<dynamic>? ?? <dynamic>[];
+
+    Future<void> submitReport() async {
+      error.value = null;
+      try {
+        ratingResult.value = await api.createReport(
+          reportedUserId: reportUser.text.trim(),
+          reason: reportReason.text.trim(),
+          description: reportDescription.text.trim(),
+          rideId: reportRideId.text.trim(),
+        );
+        refresh.value++;
+      } catch (e) {
+        error.value = e.toString();
+      }
+    }
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -569,6 +785,8 @@ class _MessagesRatingsTab extends HookConsumerWidget {
             IconButton(onPressed: sendMessage, icon: const Icon(Icons.send)),
           ],
         ),
+        _JsonPanel(title: 'My Notification Stats (server)', data: myNotificationStatsSnap.data ?? <String, dynamic>{}),
+        _JsonPanel(title: 'My Notifications (server)', data: myNotificationsSnap.data ?? <dynamic>[]),
         _JsonPanel(title: 'Messages', data: msgSnap.data ?? <dynamic>[]),
         _JsonPanel(title: 'Live Message Stream', data: live.value),
         const Divider(height: 28),
@@ -590,6 +808,14 @@ class _MessagesRatingsTab extends HookConsumerWidget {
           ],
         ),
         if (lookupResult.value != null) _JsonPanel(title: 'Driver Summary', data: lookupResult.value),
+        const Divider(height: 28),
+        const Text('Report Driver', style: TextStyle(fontWeight: FontWeight.bold)),
+        TextField(controller: reportUser, decoration: const InputDecoration(labelText: 'Reported driver user id')),
+        TextField(controller: reportRideId, decoration: const InputDecoration(labelText: 'Ride id (optional)')),
+        TextField(controller: reportReason, decoration: const InputDecoration(labelText: 'Reason')),
+        TextField(controller: reportDescription, decoration: const InputDecoration(labelText: 'Description')),
+        ElevatedButton(onPressed: submitReport, child: const Text('Submit Report')),
+        _JsonPanel(title: 'My Reports', data: myReports),
         if (error.value != null) Text(error.value!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
       ],
     );
@@ -661,6 +887,72 @@ class _ErrorView extends StatelessWidget {
           error?.toString() ?? 'Unknown error',
           style: TextStyle(color: Theme.of(context).colorScheme.error),
         ),
+      ),
+    );
+  }
+}
+
+class _NotificationsButton extends StatelessWidget {
+  const _NotificationsButton({
+    required this.unreadCount,
+    required this.notifications,
+    required this.onMarkAllRead,
+    required this.onClear,
+  });
+
+  final int unreadCount;
+  final List<AppNotification> notifications;
+  final VoidCallback onMarkAllRead;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: () {
+        showModalBottomSheet<void>(
+          context: context,
+          builder: (context) {
+            return SafeArea(
+              child: Column(
+                children: <Widget>[
+                  ListTile(
+                    title: const Text('Notifications'),
+                    subtitle: Text('${notifications.length} total, $unreadCount unread'),
+                    trailing: Wrap(
+                      spacing: 8,
+                      children: <Widget>[
+                        TextButton(onPressed: onMarkAllRead, child: const Text('Mark all read')),
+                        TextButton(onPressed: onClear, child: const Text('Clear')),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: notifications.isEmpty
+                        ? const Center(child: Text('No notifications yet'))
+                        : ListView.builder(
+                            itemCount: notifications.length,
+                            itemBuilder: (context, index) {
+                              final item = notifications[index];
+                              return ListTile(
+                                leading: Icon(item.read ? Icons.notifications_none : Icons.notifications_active),
+                                title: Text(item.title),
+                                subtitle: Text('${item.body}\n${item.createdAt.toLocal()}'),
+                                isThreeLine: true,
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+      icon: Badge(
+        isLabelVisible: unreadCount > 0,
+        label: Text('$unreadCount'),
+        child: const Icon(Icons.notifications),
       ),
     );
   }

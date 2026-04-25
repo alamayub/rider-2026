@@ -39,13 +39,73 @@ class AdminApi {
     );
   }
 
+  Future<Map<String, dynamic>> registerDeviceToken({
+    required String app,
+    required String platform,
+    required String token,
+  }) async {
+    return _map('/notifications/me/device-token', <String, dynamic>{
+      'app': app,
+      'platform': platform,
+      'token': token,
+    });
+  }
+
+  Future<List<dynamic>> listMyNotifications({int limit = 100}) =>
+      _list('/notifications/me', query: <String, dynamic>{'limit': limit});
+
+  Future<Map<String, dynamic>> getMyNotificationStats() => _getMap('/notifications/me/stats');
+
+  Future<Map<String, dynamic>> getAdminNotificationStats() => _getMap('/notifications/admin/stats');
+
+  Future<Map<String, dynamic>> sendAdminNotification({
+    required String recipientUserId,
+    required String type,
+    required String title,
+    required String body,
+    String channel = 'push',
+    Map<String, dynamic>? payload,
+  }) =>
+      _map('/notifications/admin/send', <String, dynamic>{
+        'recipientUserId': recipientUserId,
+        'type': type,
+        'title': title,
+        'body': body,
+        'channel': channel,
+        if (payload != null) 'payload': payload,
+      });
+
+  Future<Map<String, dynamic>> markNotificationReceived(String notificationId) =>
+      _map('/notifications/$notificationId/received', <String, dynamic>{});
+
+  Future<Map<String, dynamic>> markNotificationDelivered(String notificationId) =>
+      _map('/notifications/$notificationId/delivered', <String, dynamic>{});
+
+  Future<Map<String, dynamic>> markNotificationRead(String notificationId) =>
+      _map('/notifications/$notificationId/read', <String, dynamic>{});
+
   Future<List<dynamic>> getCities() async => _list('/admin/cities');
   Future<Map<String, dynamic>> createCity(String name, {bool isActive = true}) async =>
       _map('/admin/cities', <String, dynamic>{'name': name, 'isActive': isActive});
   Future<List<dynamic>> getLiveRides() async => _list('/admin/rides/live');
   Future<List<dynamic>> getReports() async => _list('/admin/reports');
+  Future<Map<String, dynamic>> createReport({
+    required String reportedUserId,
+    required String reason,
+    String? description,
+    String? rideId,
+  }) async =>
+      _map('/reports', <String, dynamic>{
+        'reportedUserId': reportedUserId,
+        'reason': reason,
+        if (description != null && description.isNotEmpty) 'description': description,
+        if (rideId != null && rideId.isNotEmpty) 'rideId': rideId,
+      });
+  Future<List<dynamic>> listMyReports() async => _list('/reports/me');
   Future<List<dynamic>> getAuditLogs() async => _list('/admin/audit-logs');
   Future<List<dynamic>> getVehicleTypes() async => _list('/admin/vehicle-types');
+  Future<Map<String, dynamic>> getRideById(String rideId) async => _getMap('/rides/$rideId');
+  Future<Map<String, dynamic>> getParcelById(String parcelId) async => _getMap('/parcels/$parcelId');
 
   Future<Map<String, dynamic>> createVehicleType({
     required String id,

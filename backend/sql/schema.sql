@@ -434,6 +434,45 @@ CREATE TABLE IF NOT EXISTS messages (
   KEY idx_messages_created_at (created_at)
 );
 
+CREATE TABLE IF NOT EXISTS notifications (
+  id VARCHAR(36) PRIMARY KEY,
+  recipient_user_id VARCHAR(36) NOT NULL,
+  type VARCHAR(64) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  body TEXT NOT NULL,
+  payload JSON NULL,
+  channel VARCHAR(32) NOT NULL,
+  status VARCHAR(24) NOT NULL,
+  sent_at DATETIME NOT NULL,
+  received_at DATETIME NULL,
+  delivered_at DATETIME NULL,
+  read_at DATETIME NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  created_by VARCHAR(36) NOT NULL,
+  updated_by VARCHAR(36) NOT NULL,
+  KEY idx_notifications_recipient (recipient_user_id),
+  KEY idx_notifications_status (status),
+  KEY idx_notifications_created_at (created_at)
+);
+
+CREATE TABLE IF NOT EXISTS user_device_tokens (
+  id VARCHAR(36) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  app VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL,
+  token VARCHAR(512) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  last_seen_at DATETIME NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  created_by VARCHAR(36) NOT NULL,
+  updated_by VARCHAR(36) NOT NULL,
+  UNIQUE KEY uniq_user_device_token (user_id, token),
+  KEY idx_device_tokens_user (user_id),
+  KEY idx_device_tokens_active (is_active)
+);
+
 CREATE TABLE IF NOT EXISTS driver_vehicles (
   id VARCHAR(36) PRIMARY KEY,
   driver_id VARCHAR(36) NOT NULL,
