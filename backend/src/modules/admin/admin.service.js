@@ -1,4 +1,4 @@
-import { createCity, listActiveRides, listAllReports, listAuditLogs, listCities } from '../../db/store.js';
+import { createCity, createVehicleTypeRecord, listActiveRides, listAllReports, listAuditLogs, listCities, listVehicleTypes } from '../../db/store.js';
 
 export async function getCities() {
   return listCities();
@@ -18,4 +18,12 @@ export async function getAllReports() {
 
 export async function getAuditLogs(limit) {
   return listAuditLogs(limit);
+}
+
+export async function getVehicleTypes() {
+  return listVehicleTypes({ onlyActive: false });
+}
+
+export async function addVehicleType(payload, actorUserId) {
+  return createVehicleTypeRecord(payload, actorUserId);
 }

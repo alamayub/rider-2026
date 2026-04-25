@@ -1,7 +1,7 @@
 import { listOnlineDriverLocationsByCity } from '../../db/store.js';
 
-export async function findNearestAvailableDriver(cityId, pickup) {
-  const onlineDrivers = await listOnlineDriverLocationsByCity(cityId);
+export async function findNearestAvailableDriver(cityId, pickup, vehicleTypeId) {
+  const onlineDrivers = await listOnlineDriverLocationsByCity(cityId, vehicleTypeId || null);
   if (onlineDrivers.length === 0) return null;
 
   onlineDrivers.sort((a, b) => {

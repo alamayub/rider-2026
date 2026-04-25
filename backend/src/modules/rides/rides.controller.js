@@ -1,4 +1,4 @@
-import { createRide, estimateFare, getRideById, listRidesByUser, updateRideStatus } from './rides.service.js';
+import { createRide, estimateFare, getRideById, listAvailableVehicleTypes, listRidesByUser, updateRideStatus } from './rides.service.js';
 
 export async function estimateFareController(req, res) {
   try {
@@ -19,7 +19,7 @@ export async function createRideController(req, res) {
 
 export async function updateRideStatusController(req, res) {
   try {
-    const ride = await updateRideStatus({ rideId: req.params.rideId, status: req.body.status, actorUserId: req.user.sub });
+    const ride = await updateRideStatus({ rideId: req.params.rideId, status: req.body.status, otp: req.body.otp, actorUserId: req.user.sub });
     return res.json(ride);
   } catch (error) {
     return res.status(400).json({ error: error.message });
@@ -34,4 +34,8 @@ export async function getRideByIdController(req, res) {
   const ride = await getRideById(req.params.rideId);
   if (!ride) return res.status(404).json({ error: 'Ride not found' });
   return res.json(ride);
+}
+
+export async function listVehicleTypesController(_req, res) {
+  return res.json(await listAvailableVehicleTypes());
 }

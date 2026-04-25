@@ -9,8 +9,8 @@ test.beforeEach(() => {
 });
 
 test('auto suspend then ban based on open report thresholds', async () => {
-  const reporter = (await signIn({ phone: '+911111111111', role: 'rider' })).user;
-  const reported = (await signIn({ phone: '+922222222222', role: 'driver' })).user;
+  const reporter = (await signIn({ phone: '+911111111111', role: 'rider', password: 'Pass@123' })).user;
+  const reported = (await signIn({ phone: '+922222222222', role: 'driver', password: 'Pass@123' })).user;
 
   for (let i = 0; i < 3; i += 1) {
     await submitReport({

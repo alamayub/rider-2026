@@ -4,27 +4,43 @@ import {
   findCouponByCode,
   findCityById,
   findRideById,
+  findVehicleTypeById,
   incrementCouponUsage,
   insertRideEvent,
+  listVehicleTypes,
+  markRideStartOtpVerified,
   listRidesByUserRole,
   updateRideStatusRecord
 } from '../../db/store.js';
 import { findNearestAvailableDriver } from '../dispatch/dispatch.service.js';
 
-export async function estimateFare({ cityId, distanceKm }) {
+function generateOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+export async function estimateFare({ cityId, distanceKm, vehicleTypeId }) {
   const city = await findCityById(cityId);
   if (!city) throw new Error('Unknown city');
+  const vehicleType = vehicleTypeId
+    ? await findVehicleTypeById(vehicleTypeId)
+    : (await listVehicleTypes({ onlyActive: true }))[0] || null;
+  if (!vehicleType) throw new Error('Vehicle type not found');
+  if (!vehicleType.isActive) throw new Error('Vehicle type inactive');
+
+  const baseAmount = city.baseFare + city.perKm * distanceKm;
+  const amount = Math.round(baseAmount * Number(vehicleType.fareMultiplier || 1));
 
   return {
     cityId,
     distanceKm,
-    amount: Math.round(city.baseFare + city.perKm * distanceKm)
+    vehicleTypeId: vehicleType.id,
+    amount
   };
 }
 
-export async function createRide({ riderId, cityId, pickup, drop, distanceKm, couponCode }) {
-  const estimate = await estimateFare({ cityId, distanceKm });
-  const driverId = await findNearestAvailableDriver(cityId, pickup);
+export async function createRide({ riderId, cityId, pickup, drop, distanceKm, couponCode, vehicleTypeId }) {
+  const estimate = await estimateFare({ cityId, distanceKm, vehicleTypeId });
+  const driverId = await findNearestAvailableDriver(cityId, pickup, estimate.vehicleTypeId);
   let finalFare = estimate.amount;
   let couponResult = null;
 
@@ -57,6 +73,8 @@ export async function createRide({ riderId, cityId, pickup, drop, distanceKm, co
     pickup,
     drop,
     fare: finalFare,
+    vehicleTypeId: estimate.vehicleTypeId,
+    rideStartOtp: generateOtp(),
     status: driverId ? 'matched' : 'requested',
     actorUserId: riderId
   });
@@ -86,7 +104,16 @@ export async function createRide({ riderId, cityId, pickup, drop, distanceKm, co
   return ride;
 }
 
-export async function updateRideStatus({ rideId, status, actorUserId }) {
+export async function updateRideStatus({ rideId, status, actorUserId, otp }) {
+  const existing = await findRideById(rideId);
+  if (!existing) throw new Error('Ride not found');
+
+  if (status === 'in_progress') {
+    if (!otp) throw new Error('Ride start OTP is required');
+    if (String(otp) !== String(existing.rideStartOtp)) throw new Error('Invalid ride start OTP');
+    await markRideStartOtpVerified({ rideId, actorUserId });
+  }
+
   const ride = await updateRideStatusRecord({ rideId, status, actorUserId });
   if (!ride) throw new Error('Ride not found');
 
@@ -100,4 +127,8 @@ export async function getRideById(rideId) {
 
 export async function listRidesByUser(userId, role) {
   return listRidesByUserRole(userId, role);
+}
+
+export async function listAvailableVehicleTypes() {
+  return listVehicleTypes({ onlyActive: true });
 }
