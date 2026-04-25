@@ -24,6 +24,7 @@ const baseQuery = async (args, api, extraOptions) => {
 export const api = createApi({
   reducerPath: 'api',
   baseQuery,
+  tagTypes: ['Notifications', 'NotificationStats', 'GlobalNotificationStats'],
   endpoints: (builder) => ({
     health: builder.query({
       query: () => '/health',
@@ -48,6 +49,10 @@ export const api = createApi({
       query: ({ role = '', status = '', limit = 200 } = {}) =>
         `/admin/users?role=${encodeURIComponent(role)}&status=${encodeURIComponent(status)}&limit=${limit}`,
     }),
+    adminSearchUsers: builder.query({
+      query: ({ q, role = '', status = '', limit = 25 }) =>
+        `/admin/users/search?q=${encodeURIComponent(q)}&role=${encodeURIComponent(role)}&status=${encodeURIComponent(status)}&limit=${limit}`,
+    }),
     updateUserStatus: builder.mutation({
       query: ({ userId, status, reason }) => ({
         url: `/admin/users/${userId}/status`,
@@ -68,10 +73,61 @@ export const api = createApi({
       query: (app = 'admin') => `/payments/methods/grouped?app=${encodeURIComponent(app)}&country=np&currency=NPR`,
     }),
     myNotifications: builder.query({
-      query: () => '/notifications/me?limit=100',
+      query: (limit = 200) => `/notifications/me?limit=${limit}`,
+      providesTags: [{ type: 'Notifications', id: 'LIST' }],
     }),
     myNotificationStats: builder.query({
       query: () => '/notifications/me/stats',
+      providesTags: [{ type: 'NotificationStats', id: 'ME' }],
+    }),
+    adminGlobalNotificationStats: builder.query({
+      query: () => '/notifications/admin/stats',
+      providesTags: [{ type: 'GlobalNotificationStats', id: 'GLOBAL' }],
+    }),
+    adminSendNotification: builder.mutation({
+      query: (body) => ({
+        url: '/notifications/admin/send',
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: () => [
+        { type: 'Notifications', id: 'LIST' },
+        { type: 'NotificationStats', id: 'ME' },
+        { type: 'GlobalNotificationStats', id: 'GLOBAL' },
+      ],
+    }),
+    markNotificationReceived: builder.mutation({
+      query: (notificationId) => ({
+        url: `/notifications/${notificationId}/received`,
+        method: 'POST',
+      }),
+      invalidatesTags: () => [
+        { type: 'Notifications', id: 'LIST' },
+        { type: 'NotificationStats', id: 'ME' },
+        { type: 'GlobalNotificationStats', id: 'GLOBAL' },
+      ],
+    }),
+    markNotificationDelivered: builder.mutation({
+      query: (notificationId) => ({
+        url: `/notifications/${notificationId}/delivered`,
+        method: 'POST',
+      }),
+      invalidatesTags: () => [
+        { type: 'Notifications', id: 'LIST' },
+        { type: 'NotificationStats', id: 'ME' },
+        { type: 'GlobalNotificationStats', id: 'GLOBAL' },
+      ],
+    }),
+    markNotificationRead: builder.mutation({
+      query: (notificationId) => ({
+        url: `/notifications/${notificationId}/read`,
+        method: 'POST',
+      }),
+      invalidatesTags: () => [
+        { type: 'Notifications', id: 'LIST' },
+        { type: 'NotificationStats', id: 'ME' },
+        { type: 'GlobalNotificationStats', id: 'GLOBAL' },
+      ],
     }),
     conversations: builder.query({
       query: () => '/messages/conversations',
@@ -96,6 +152,7 @@ export const {
   useLazyLiveRidesQuery,
   useLazyReportsQuery,
   useAdminUsersQuery,
+  useAdminSearchUsersQuery,
   useUpdateUserStatusMutation,
   useUserAccountActionsQuery,
   useDriverKycQuery,
@@ -103,6 +160,11 @@ export const {
   usePaymentMethodsGroupedQuery,
   useMyNotificationsQuery,
   useMyNotificationStatsQuery,
+  useAdminGlobalNotificationStatsQuery,
+  useAdminSendNotificationMutation,
+  useMarkNotificationReceivedMutation,
+  useMarkNotificationDeliveredMutation,
+  useMarkNotificationReadMutation,
   useConversationsQuery,
   useMessagesQuery,
   useSendMessageMutation,

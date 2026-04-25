@@ -4,12 +4,13 @@ import {
   getMyNotificationStats,
   getMyNotifications,
   registerDeviceToken,
-  sendNotification
+  sendNotificationCampaign
 } from '../services/notifications.service.js';
 
 export async function sendNotificationController(req, res) {
   try {
-    const result = await sendNotification({
+    const result = await sendNotificationCampaign({
+      target: req.body.target || 'specific_user',
       recipientUserId: req.body.recipientUserId,
       type: req.body.type,
       title: req.body.title,

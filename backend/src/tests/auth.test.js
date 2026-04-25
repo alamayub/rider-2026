@@ -1,12 +1,58 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requestSignInOtp, resetAuthRateLimiters, signIn } from '../services/auth.service.js';
+import { registerRiderOrDriver, requestSignInOtp, resetAuthRateLimiters, signIn } from '../services/auth.service.js';
 import { registerDbHooks } from './test-db-hooks.js';
 
 registerDbHooks();
 
 test.beforeEach(() => {
   resetAuthRateLimiters();
+});
+
+test('register rider creates account and returns tokens', async () => {
+  const result = await registerRiderOrDriver({
+    phone: '+911234567900',
+    email: 'r@example.com',
+    password: 'Pass@123',
+    role: 'rider',
+    sourceIp: '10.0.0.11'
+  });
+  assert.ok(result.user.id);
+  assert.equal(result.user.role, 'rider');
+  assert.ok(result.accessToken);
+  assert.ok(result.refreshToken);
+});
+
+test('register rejects duplicate phone for same role', async () => {
+  await registerRiderOrDriver({
+    phone: '+911234567901',
+    password: 'Pass@123',
+    role: 'driver',
+    sourceIp: '10.0.0.12'
+  });
+  await assert.rejects(
+    () =>
+      registerRiderOrDriver({
+        phone: '+911234567901',
+        password: 'Pass@123',
+        role: 'driver',
+        sourceIp: '10.0.0.12'
+      }),
+    /already exists/
+  );
+});
+
+test('register rejects admin role', async () => {
+  await assert.rejects(
+    () =>
+      registerRiderOrDriver({
+        phone: '+911234567902',
+        password: 'Pass@123',
+        role: 'admin',
+        sourceIp: '10.0.0.13'
+      }),
+    /only available for rider or driver/
+  );
 });
 
 test('password sign in returns tokens and user', async () => {

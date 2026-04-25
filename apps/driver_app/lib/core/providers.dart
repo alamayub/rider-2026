@@ -78,21 +78,34 @@ class SessionNotifier extends StateNotifier<DriverSession?> {
   SessionNotifier(this._api) : super(null);
   final DriverApi _api;
 
+  void _applyAuthResult(Map<String, dynamic> result, String fallbackPhone) {
+    final token = (result['accessToken'] ?? '').toString();
+    final user = Map<String, dynamic>.from((result['user'] ?? <String, dynamic>{}) as Map);
+    final userId = (user['id'] ?? '').toString();
+    if (token.isEmpty || userId.isEmpty) throw Exception('Invalid auth response');
+    _api.accessToken = token;
+    state = DriverSession(
+      accessToken: token,
+      userId: userId,
+      phone: (user['phone'] ?? fallbackPhone).toString(),
+    );
+  }
+
   Future<void> signIn({
     required String phone,
     required String password,
   }) async {
     final result = await _api.signIn(phone: phone, password: password);
-    final token = (result['accessToken'] ?? '').toString();
-    final user = Map<String, dynamic>.from((result['user'] ?? <String, dynamic>{}) as Map);
-    final userId = (user['id'] ?? '').toString();
-    if (token.isEmpty || userId.isEmpty) throw Exception('Invalid sign in response');
-    _api.accessToken = token;
-    state = DriverSession(
-      accessToken: token,
-      userId: userId,
-      phone: (user['phone'] ?? phone).toString(),
-    );
+    _applyAuthResult(result, phone);
+  }
+
+  Future<void> register({
+    required String phone,
+    required String password,
+    String? email,
+  }) async {
+    final result = await _api.register(phone: phone, password: password, email: email);
+    _applyAuthResult(result, phone);
   }
 
   void signOut() {

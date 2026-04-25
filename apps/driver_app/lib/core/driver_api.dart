@@ -32,6 +32,23 @@ class DriverApi {
     return Map<String, dynamic>.from(response.data as Map);
   }
 
+  Future<Map<String, dynamic>> register({
+    required String phone,
+    required String password,
+    String? email,
+  }) async {
+    final response = await _dio.post(
+      '/auth/register',
+      data: <String, dynamic>{
+        'phone': phone,
+        'role': 'driver',
+        'password': password,
+        if (email != null && email.trim().isNotEmpty) 'email': email.trim(),
+      },
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   Future<void> requestOtp({required String phone}) async {
     await _dio.post(
       '/auth/request-otp',

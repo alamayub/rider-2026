@@ -7,6 +7,7 @@ import {
   getLiveRides,
   getUserAccountActions,
   getUsers,
+  searchUsersForAdmin,
   getVehicleTypes,
   rebuildCounters,
   setUserAccountStatus
@@ -57,6 +58,23 @@ export async function listUsersController(req, res) {
       role: req.query.role || null,
       status: req.query.status || null,
       limit: Number.isNaN(limit) ? 200 : limit
+    })
+  );
+}
+
+export async function searchUsersController(req, res) {
+  const q = String(req.query.q || '').trim();
+  const rawLimit = Number(req.query.limit || 25);
+  const limit = Math.min(50, Math.max(1, Number.isNaN(rawLimit) ? 25 : rawLimit));
+  if (q.length < 2) {
+    return res.json([]);
+  }
+  return res.json(
+    await searchUsersForAdmin({
+      q,
+      role: req.query.role || null,
+      status: req.query.status || null,
+      limit
     })
   );
 }

@@ -58,8 +58,35 @@ class AdminApi {
 
   Future<Map<String, dynamic>> getAdminNotificationStats() => _getMap('/notifications/admin/stats');
 
+  Future<List<dynamic>> searchAdminUsers({
+    required String q,
+    String role = '',
+    String status = '',
+    int limit = 25,
+  }) async {
+    final response = await _dio.get(
+      '/admin/users/search',
+      queryParameters: <String, dynamic>{
+        'q': q,
+        'role': role,
+        'status': status,
+        'limit': limit,
+      },
+      options: _authOptions,
+    );
+    final data = response.data;
+    if (data is List) return List<dynamic>.from(data);
+    throw DioException(
+      requestOptions: response.requestOptions,
+      message: 'Unexpected search response from /admin/users/search',
+      response: response,
+      type: DioExceptionType.badResponse,
+    );
+  }
+
   Future<Map<String, dynamic>> sendAdminNotification({
-    required String recipientUserId,
+    required String target,
+    String? recipientUserId,
     required String type,
     required String title,
     required String body,
@@ -67,7 +94,8 @@ class AdminApi {
     Map<String, dynamic>? payload,
   }) =>
       _map('/notifications/admin/send', <String, dynamic>{
-        'recipientUserId': recipientUserId,
+        'target': target,
+        if (recipientUserId != null && recipientUserId.isNotEmpty) 'recipientUserId': recipientUserId,
         'type': type,
         'title': title,
         'body': body,

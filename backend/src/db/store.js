@@ -534,6 +534,38 @@ export async function listUsers({ role = null, status = null, limit = 200 } = {}
   return rows;
 }
 
+/** Server-side user search for admin recipient pickers (no full-table listing). */
+export async function searchUsers({ q, role = null, status = null, limit = 25 } = {}) {
+  const term = String(q || '').trim().toLowerCase();
+  const safeLimit = Math.min(50, Math.max(1, Number(limit) || 25));
+  if (term.length < 2) {
+    return [];
+  }
+
+  if (env.dbClient === 'memory') {
+    return memory.users
+      .filter((u) => {
+        if (role && u.role !== role) return false;
+        if (status && u.status !== status) return false;
+        const hay = `${u.id} ${u.phone || ''} ${u.email || ''} ${u.role || ''} ${u.status || ''}`.toLowerCase();
+        return hay.includes(term);
+      })
+      .slice(0, safeLimit);
+  }
+
+  const [rows] = await pool.query(
+    `SELECT id, phone, email, role, status, created_at AS createdAt
+     FROM users
+     WHERE (? IS NULL OR role = ?)
+       AND (? IS NULL OR status = ?)
+       AND LOCATE(?, LOWER(CONCAT_WS(' ', CAST(id AS CHAR), IFNULL(phone,''), IFNULL(email,''), IFNULL(role,''), IFNULL(status,'')))) > 0
+     ORDER BY created_at DESC
+     LIMIT ?`,
+    [role || null, role || null, status || null, status || null, term, safeLimit]
+  );
+  return rows;
+}
+
 export async function setUserAuthOtp({ userId, otp, expiresAt, actorUserId }) {
   const actorId = actorOrSystem(actorUserId);
   const updatedAt = now();

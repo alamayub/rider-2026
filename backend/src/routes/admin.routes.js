@@ -3,6 +3,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 import {
   createCityController,
   listUsersController,
+  searchUsersController,
   createVehicleTypeController,
   getAuditLogsController,
   getCitiesController,
@@ -24,6 +25,7 @@ adminRouter.get('/reports', getReportsController);
 adminRouter.get('/audit-logs', getAuditLogsController);
 adminRouter.get('/vehicle-types', getVehicleTypesController);
 adminRouter.post('/vehicle-types', createVehicleTypeController);
+adminRouter.get('/users/search', searchUsersController);
 adminRouter.get('/users', listUsersController);
 adminRouter.post('/users/:userId/status', updateUserStatusController);
 adminRouter.get('/users/:userId/account-actions', userAccountActionsController);

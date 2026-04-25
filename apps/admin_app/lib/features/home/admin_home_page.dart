@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -1033,9 +1034,23 @@ class _NotificationsOpsTab extends HookWidget {
   const _NotificationsOpsTab({required this.api});
   final AdminApi api;
 
+  static const List<MapEntry<String, String>> _sendTargets = <MapEntry<String, String>>[
+    MapEntry('all_users', 'All users'),
+    MapEntry('all_riders', 'All riders'),
+    MapEntry('all_drivers', 'All drivers'),
+    MapEntry('specific_user', 'Specific user'),
+    MapEntry('specific_rider', 'Specific rider'),
+    MapEntry('specific_driver', 'Specific driver'),
+  ];
+
   @override
   Widget build(BuildContext context) {
-    final recipientUserId = useTextEditingController();
+    final sendTarget = useState<String>('all_users');
+    final searchController = useTextEditingController();
+    final debouncedSearch = useState<String>('');
+    final debounceTimer = useRef<Timer?>(null);
+    final selectedRecipientId = useState<String>('');
+    final bulkConfirm = useTextEditingController();
     final type = useTextEditingController(text: 'message');
     final title = useTextEditingController();
     final body = useTextEditingController();
@@ -1044,6 +1059,51 @@ class _NotificationsOpsTab extends HookWidget {
     final result = useState<Object?>(null);
     final error = useState<String?>(null);
     final refresh = useState(0);
+
+    final isSpecificTarget = sendTarget.value.startsWith('specific_');
+    final isBulkTarget = !isSpecificTarget;
+
+    useEffect(() {
+      void onSearchChanged() {
+        debounceTimer.value?.cancel();
+        debounceTimer.value = Timer(const Duration(milliseconds: 280), () {
+          debouncedSearch.value = searchController.text.trim();
+        });
+      }
+
+      searchController.addListener(onSearchChanged);
+      return () {
+        debounceTimer.value?.cancel();
+        searchController.removeListener(onSearchChanged);
+      };
+    }, <Object?>[searchController]);
+
+    useEffect(() {
+      if (!sendTarget.value.startsWith('specific_')) {
+        debounceTimer.value?.cancel();
+        searchController.clear();
+        debouncedSearch.value = '';
+        selectedRecipientId.value = '';
+      }
+      return null;
+    }, <Object?>[sendTarget.value]);
+
+    final searchRole = switch (sendTarget.value) {
+      'specific_rider' => 'rider',
+      'specific_driver' => 'driver',
+      _ => '',
+    };
+
+    final searchFuture = useMemoized(
+      () {
+        if (!isSpecificTarget || debouncedSearch.value.length < 2) {
+          return Future<List<dynamic>>.value(<dynamic>[]);
+        }
+        return api.searchAdminUsers(q: debouncedSearch.value, role: searchRole);
+      },
+      <Object?>[sendTarget.value, debouncedSearch.value],
+    );
+    final searchSnap = useFuture(searchFuture);
 
     final future = useMemoized(
       () => Future.wait<dynamic>(<Future<dynamic>>[
@@ -1064,6 +1124,14 @@ class _NotificationsOpsTab extends HookWidget {
     Future<void> send() async {
       error.value = null;
       try {
+        if (isSpecificTarget && selectedRecipientId.value.trim().isEmpty) {
+          error.value = 'Select a recipient (search and pick a user).';
+          return;
+        }
+        if (isBulkTarget && bulkConfirm.text.trim().toUpperCase() != 'SEND') {
+          error.value = 'For bulk audience, type SEND in the confirmation field.';
+          return;
+        }
         Map<String, dynamic>? payload;
         final raw = payloadRaw.text.trim();
         if (raw.isNotEmpty) {
@@ -1071,7 +1139,8 @@ class _NotificationsOpsTab extends HookWidget {
           if (decoded is Map<String, dynamic>) payload = decoded;
         }
         result.value = await api.sendAdminNotification(
-          recipientUserId: recipientUserId.text.trim(),
+          target: sendTarget.value,
+          recipientUserId: isSpecificTarget ? selectedRecipientId.value.trim() : null,
           type: type.text.trim(),
           title: title.text.trim(),
           body: body.text.trim(),
@@ -1079,6 +1148,7 @@ class _NotificationsOpsTab extends HookWidget {
           payload: payload,
         );
         refresh.value++;
+        if (isBulkTarget) bulkConfirm.clear();
       } catch (e) {
         error.value = e.toString();
       }
@@ -1091,7 +1161,116 @@ class _NotificationsOpsTab extends HookWidget {
         _JsonPanel(title: 'My Notification Stats', data: myStats),
         const Divider(height: 28),
         const Text('Send Notification', style: TextStyle(fontWeight: FontWeight.bold)),
-        TextField(controller: recipientUserId, decoration: const InputDecoration(labelText: 'Recipient user id')),
+        const SizedBox(height: 8),
+        Text('Target audience', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 4),
+        DropdownButton<String>(
+          isExpanded: true,
+          value: sendTarget.value,
+          items: _sendTargets
+              .map(
+                (MapEntry<String, String> e) => DropdownMenuItem<String>(
+                  value: e.key,
+                  child: Text(e.value),
+                ),
+              )
+              .toList(),
+          onChanged: (String? v) {
+            if (v != null) sendTarget.value = v;
+          },
+        ),
+        if (isSpecificTarget) ...<Widget>[
+          const SizedBox(height: 12),
+          TextField(
+            controller: searchController,
+            decoration: const InputDecoration(
+              labelText: 'Search recipient',
+              hintText: 'At least 2 characters (id, phone, email…)',
+            ),
+          ),
+          if (debouncedSearch.value.length >= 2) ...<Widget>[
+            const SizedBox(height: 8),
+            if (searchSnap.connectionState == ConnectionState.waiting)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (searchSnap.hasError)
+              Text(
+                'Search failed: ${searchSnap.error}',
+                style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 13),
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 220),
+                child: Material(
+                  elevation: 1,
+                  borderRadius: BorderRadius.circular(8),
+                  clipBehavior: Clip.antiAlias,
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: (searchSnap.data ?? <dynamic>[]).length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (BuildContext context, int i) {
+                      final rows = searchSnap.data ?? <dynamic>[];
+                      final row = Map<String, dynamic>.from(rows[i] as Map);
+                      final id = row['id']?.toString() ?? '';
+                      final phone = row['phone']?.toString() ?? '—';
+                      final role = row['role']?.toString() ?? '';
+                      final email = row['email']?.toString();
+                      final status = row['status']?.toString();
+                      return ListTile(
+                        dense: true,
+                        title: Text('#$id · $phone', style: const TextStyle(fontSize: 14)),
+                        subtitle: Text(
+                          <String?>[role, email, status].where((String? s) => s != null && s.isNotEmpty).join(' · '),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        onTap: () {
+                          selectedRecipientId.value = id;
+                          searchController.text = '$phone · $role · #$id';
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ),
+          ],
+          if (selectedRecipientId.value.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      'Selected user ID: ${selectedRecipientId.value}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      selectedRecipientId.value = '';
+                      searchController.clear();
+                      debouncedSearch.value = '';
+                    },
+                    child: const Text('Clear'),
+                  ),
+                ],
+              ),
+            ),
+        ],
+        if (isBulkTarget) ...<Widget>[
+          const SizedBox(height: 12),
+          TextField(
+            controller: bulkConfirm,
+            decoration: InputDecoration(
+              labelText: 'Bulk confirm',
+              hintText:
+                  'Type SEND to confirm (${_sendTargets.firstWhere((MapEntry<String, String> e) => e.key == sendTarget.value, orElse: () => _sendTargets.first).value})',
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
         TextField(controller: type, decoration: const InputDecoration(labelText: 'Type (message/payment/...)')),
         TextField(controller: title, decoration: const InputDecoration(labelText: 'Title')),
         TextField(controller: body, decoration: const InputDecoration(labelText: 'Body')),

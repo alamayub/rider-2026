@@ -1,7 +1,11 @@
-import { requestSignInOtp, signIn } from '../services/auth.service.js';
+import { registerRiderOrDriver, requestSignInOtp, signIn } from '../services/auth.service.js';
 
 function isValidRole(role) {
   return ['rider', 'driver', 'admin'].includes(role);
+}
+
+function isRiderOrDriver(role) {
+  return role === 'rider' || role === 'driver';
 }
 
 export async function signInController(req, res) {
@@ -25,6 +29,42 @@ export async function signInController(req, res) {
     return res.json(result);
   } catch (error) {
     return res.status(403).json({ error: 'Authentication failed' });
+  }
+}
+
+export async function registerController(req, res) {
+  const { phone, email, password, role } = req.body;
+  const sourceIp = req.ip;
+
+  if (!phone || !password || !role) {
+    return res.status(400).json({ error: 'phone, password, and role are required' });
+  }
+
+  if (!isRiderOrDriver(role)) {
+    return res.status(400).json({ error: 'registration is only allowed for rider or driver' });
+  }
+
+  try {
+    const result = await registerRiderOrDriver({
+      phone,
+      email: email || null,
+      password,
+      role,
+      sourceIp
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    const msg = error?.message || 'Registration failed';
+    if (msg.includes('already exists')) {
+      return res.status(409).json({ error: msg });
+    }
+    if (msg.includes('Too many attempts')) {
+      return res.status(429).json({ error: msg });
+    }
+    if (msg.includes('Password must')) {
+      return res.status(400).json({ error: msg });
+    }
+    return res.status(400).json({ error: msg });
   }
 }
 

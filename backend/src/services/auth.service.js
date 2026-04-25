@@ -136,6 +136,44 @@ export async function requestSignInOtp({ phone, email, role, sourceIp }) {
   return payload;
 }
 
+export async function registerRiderOrDriver({ phone, email, password, role, sourceIp }) {
+  const r = String(role || '').trim();
+  if (r !== 'rider' && r !== 'driver') {
+    throw new Error('Registration is only available for rider or driver');
+  }
+  const p = String(phone || '').trim();
+  if (!p) {
+    throw new Error('phone is required');
+  }
+  if (!password) {
+    throw new Error('password is required');
+  }
+
+  consumeAuthRateLimit({ scope: 'register', identifier: p, sourceIp });
+
+  const existing = await findUserByPhoneRole(p, r);
+  if (existing) {
+    throw new Error('An account with this phone number already exists');
+  }
+
+  if (!validatePasswordStrength(password)) {
+    throw new Error(
+      'Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character'
+    );
+  }
+
+  const passwordHash = hashPassword(password);
+  let user = await createUser({ phone: p, email: email ? String(email).trim() || null : null, role: r, passwordHash });
+  user = await updateUserSignInGuard({
+    userId: user.id,
+    failedSigninCount: 0,
+    signinLockedUntil: null,
+    actorUserId: user.id
+  });
+  const tokens = buildTokens(user);
+  return { user, ...tokens };
+}
+
 export async function signIn({ phone, email, role, password, otp, sourceIp }) {
   consumeAuthRateLimit({ scope: 'signin', identifier: phone, sourceIp });
   if (!password && !otp) {

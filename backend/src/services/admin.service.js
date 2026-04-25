@@ -9,6 +9,7 @@ import {
   listAuditLogs,
   listCities,
   listUsers,
+  searchUsers,
   listVehicleTypes,
   rebuildPlatformCounters,
   updateUserStatus
@@ -44,6 +45,10 @@ export async function addVehicleType(payload, actorUserId) {
 
 export async function getUsers({ role, status, limit }) {
   return listUsers({ role, status, limit });
+}
+
+export async function searchUsersForAdmin({ q, role, status, limit }) {
+  return searchUsers({ q, role: role || null, status: status || null, limit });
 }
 
 export async function getUserAccountActions(userId, limit) {

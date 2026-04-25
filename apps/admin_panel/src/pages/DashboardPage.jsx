@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useLazyAdminAnalyticsQuery, useLazyLiveRidesQuery, useLazyReportsQuery } from '../services/api'
 import DataTable from '../components/DataTable'
 import StatCard from '../components/StatCard'
-import { FiActivity, FiBell, FiDollarSign, FiRefreshCw, FiUsers } from 'react-icons/fi'
+import { FiActivity, FiBell, FiDollarSign, FiUsers } from 'react-icons/fi'
 
 function DashboardPage() {
   const [loadAnalytics, analyticsState] = useLazyAdminAnalyticsQuery()
@@ -13,18 +13,8 @@ function DashboardPage() {
     void Promise.all([loadAnalytics(), loadRides(), loadReports()])
   }, [loadAnalytics, loadReports, loadRides])
 
-  const reload = () => void Promise.all([loadAnalytics(), loadRides(), loadReports()])
-
   return (
     <section className="space-y-6">
-      <div className="flex justify-end">
-        <button className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700" onClick={reload}>
-          <span className="flex items-center gap-2">
-            <FiRefreshCw size={16} />
-            Refresh
-          </span>
-        </button>
-      </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard title="Total Rides" value={analyticsState.data?.totalRides ?? '-'} icon={FiActivity} />
         <StatCard title="Total Users" value={analyticsState.data?.counters?.usersTotal ?? '-'} icon={FiUsers} />
