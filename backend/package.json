@@ -1,0 +1,27 @@
+{
+  "name": "ride-app-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "test": "DB_CLIENT=memory node --test src/tests/*.test.js",
+    "db:migrate": "node scripts/db-migrate.js",
+    "load:test": "node scripts/load-test.js",
+    "pilot:smoke": "node scripts/pilot-smoke.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.12.0",
+    "socket.io": "^4.7.5",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}

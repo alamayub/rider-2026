@@ -1,0 +1,11 @@
+name: shared_client
+description: Shared HTTP and socket client abstractions
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  dio: ^5.4.2
+  socket_io_client: ^2.0.3+1

@@ -1,0 +1,7 @@
+import 'package:flutter/material.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'app/admin_app.dart';
+
+void main() {
+  runApp(const ProviderScope(child: AdminApp()));
+}

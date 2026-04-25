@@ -1,0 +1,20 @@
+[
+  {
+    "id": "blr",
+    "name": "Bengaluru",
+    "currency": "INR",
+    "baseFare": 60,
+    "perKm": 16,
+    "supportNumber": "+91-80-0000-0001",
+    "taxPercent": 5
+  },
+  {
+    "id": "hyd",
+    "name": "Hyderabad",
+    "currency": "INR",
+    "baseFare": 55,
+    "perKm": 15,
+    "supportNumber": "+91-40-0000-0001",
+    "taxPercent": 5
+  }
+]
