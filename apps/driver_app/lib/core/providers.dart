@@ -1,7 +1,17 @@
+import 'dart:async';
+
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'config.dart';
 import 'driver_api.dart';
+
+/// Injected from [main] via [ProviderScope.overrides].
+final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
+  throw StateError(
+    'Override sharedPreferencesProvider in main() after SharedPreferences.getInstance().',
+  );
+});
 
 class AppNotification {
   const AppNotification({
@@ -75,8 +85,41 @@ class DriverSession {
 }
 
 class SessionNotifier extends StateNotifier<DriverSession?> {
-  SessionNotifier(this._api) : super(null);
+  SessionNotifier(this._api, this._prefs) : super(null) {
+    _restoreSession();
+  }
+
   final DriverApi _api;
+  final SharedPreferences _prefs;
+
+  static const String _kAccessToken = 'driver_session_access_token';
+  static const String _kUserId = 'driver_session_user_id';
+  static const String _kPhone = 'driver_session_phone';
+
+  void _restoreSession() {
+    final token = (_prefs.getString(_kAccessToken) ?? '').trim();
+    final userId = (_prefs.getString(_kUserId) ?? '').trim();
+    final phone = (_prefs.getString(_kPhone) ?? '').trim();
+    if (token.isEmpty || userId.isEmpty) return;
+    _api.accessToken = token;
+    state = DriverSession(
+      accessToken: token,
+      userId: userId,
+      phone: phone.isEmpty ? userId : phone,
+    );
+  }
+
+  void _persistSession(DriverSession session) {
+    unawaited(_prefs.setString(_kAccessToken, session.accessToken));
+    unawaited(_prefs.setString(_kUserId, session.userId));
+    unawaited(_prefs.setString(_kPhone, session.phone));
+  }
+
+  void _clearPersistedSession() {
+    unawaited(_prefs.remove(_kAccessToken));
+    unawaited(_prefs.remove(_kUserId));
+    unawaited(_prefs.remove(_kPhone));
+  }
 
   void _applyAuthResult(Map<String, dynamic> result, String fallbackPhone) {
     final token = (result['accessToken'] ?? '').toString();
@@ -84,11 +127,13 @@ class SessionNotifier extends StateNotifier<DriverSession?> {
     final userId = (user['id'] ?? '').toString();
     if (token.isEmpty || userId.isEmpty) throw Exception('Invalid auth response');
     _api.accessToken = token;
-    state = DriverSession(
+    final session = DriverSession(
       accessToken: token,
       userId: userId,
       phone: (user['phone'] ?? fallbackPhone).toString(),
     );
+    state = session;
+    _persistSession(session);
   }
 
   Future<void> signIn({
@@ -111,13 +156,44 @@ class SessionNotifier extends StateNotifier<DriverSession?> {
   void signOut() {
     _api.accessToken = null;
     state = null;
+    _clearPersistedSession();
   }
 }
+
+const int _driverHomeTabMax = 4;
+
+class DriverHomeTabNotifier extends StateNotifier<int> {
+  DriverHomeTabNotifier(this._prefs)
+      : super(_clampHomeTab(_prefs.getInt(_kDriverHomeTab) ?? 0, _driverHomeTabMax));
+
+  final SharedPreferences _prefs;
+  static const String _kDriverHomeTab = 'driver_home_tab';
+
+  static int _clampHomeTab(int index, int max) {
+    if (index < 0) return 0;
+    if (index > max) return max;
+    return index;
+  }
+
+  void setTab(int index) {
+    final next = _clampHomeTab(index, _driverHomeTabMax);
+    state = next;
+    unawaited(_prefs.setInt(_kDriverHomeTab, next));
+  }
+}
+
+final driverHomeTabProvider =
+    StateNotifierProvider<DriverHomeTabNotifier, int>((ref) {
+  return DriverHomeTabNotifier(ref.watch(sharedPreferencesProvider));
+});
 
 final driverApiProvider = Provider<DriverApi>((ref) => DriverApi(baseUrl: kApiBaseUrl));
 
 final sessionProvider = StateNotifierProvider<SessionNotifier, DriverSession?>((ref) {
-  return SessionNotifier(ref.watch(driverApiProvider));
+  return SessionNotifier(
+    ref.watch(driverApiProvider),
+    ref.watch(sharedPreferencesProvider),
+  );
 });
 
 final socketProvider = Provider<io.Socket?>((ref) {

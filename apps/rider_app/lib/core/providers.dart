@@ -1,7 +1,17 @@
+import 'dart:async';
+
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'config.dart';
 import 'rider_api.dart';
+
+/// Injected from [main] via [ProviderScope.overrides].
+final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
+  throw StateError(
+    'Override sharedPreferencesProvider in main() after SharedPreferences.getInstance().',
+  );
+});
 
 class AppNotification {
   const AppNotification({
@@ -75,23 +85,66 @@ class RiderSession {
 }
 
 class SessionNotifier extends StateNotifier<RiderSession?> {
-  SessionNotifier(this._api) : super(null);
+  SessionNotifier(this._api, this._prefs) : super(null) {
+    _restoreSession();
+  }
+
   final RiderApi _api;
+  final SharedPreferences _prefs;
+
+  static const String _kAccessToken = 'rider_session_access_token';
+  static const String _kUserId = 'rider_session_user_id';
+  static const String _kPhone = 'rider_session_phone';
+
+  void _restoreSession() {
+    final token = (_prefs.getString(_kAccessToken) ?? '').trim();
+    final userId = (_prefs.getString(_kUserId) ?? '').trim();
+    final phone = (_prefs.getString(_kPhone) ?? '').trim();
+    if (token.isEmpty || userId.isEmpty) return;
+    _api.accessToken = token;
+    state = RiderSession(
+      accessToken: token,
+      userId: userId,
+      phone: phone.isEmpty ? userId : phone,
+    );
+  }
+
+  void _persistSession(RiderSession session) {
+    unawaited(_prefs.setString(_kAccessToken, session.accessToken));
+    unawaited(_prefs.setString(_kUserId, session.userId));
+    unawaited(_prefs.setString(_kPhone, session.phone));
+  }
+
+  void _clearPersistedSession() {
+    unawaited(_prefs.remove(_kAccessToken));
+    unawaited(_prefs.remove(_kUserId));
+    unawaited(_prefs.remove(_kPhone));
+  }
 
   void _applyAuthResult(Map<String, dynamic> result, String fallbackPhone) {
     final token = (result['accessToken'] ?? '').toString();
-    final user = Map<String, dynamic>.from((result['user'] ?? <String, dynamic>{}) as Map);
+    final user = Map<String, dynamic>.from(
+        (result['user'] ?? <String, dynamic>{}) as Map);
     final userId = (user['id'] ?? '').toString();
-    if (token.isEmpty || userId.isEmpty) throw Exception('Invalid auth response');
+    if (token.isEmpty || userId.isEmpty) {
+      throw Exception('Invalid auth response');
+    }
     _api.accessToken = token;
-    state = RiderSession(accessToken: token, userId: userId, phone: (user['phone'] ?? fallbackPhone).toString());
+    final session = RiderSession(
+        accessToken: token,
+        userId: userId,
+        phone: (user['phone'] ?? fallbackPhone).toString());
+    state = session;
+    _persistSession(session);
   }
 
   Future<void> signIn({
     required String phone,
-    required String password,
+    String? password,
+    String? otp,
   }) async {
-    final result = await _api.signIn(phone: phone, password: password);
+    final result =
+        await _api.signIn(phone: phone, password: password, otp: otp);
     _applyAuthResult(result, phone);
   }
 
@@ -100,20 +153,54 @@ class SessionNotifier extends StateNotifier<RiderSession?> {
     required String password,
     String? email,
   }) async {
-    final result = await _api.register(phone: phone, password: password, email: email);
+    final result =
+        await _api.register(phone: phone, password: password, email: email);
     _applyAuthResult(result, phone);
   }
 
   void signOut() {
     _api.accessToken = null;
     state = null;
+    _clearPersistedSession();
   }
 }
 
-final riderApiProvider = Provider<RiderApi>((ref) => RiderApi(baseUrl: kApiBaseUrl));
+const int _riderHomeTabMax = 5;
 
-final sessionProvider = StateNotifierProvider<SessionNotifier, RiderSession?>((ref) {
-  return SessionNotifier(ref.watch(riderApiProvider));
+class RiderHomeTabNotifier extends StateNotifier<int> {
+  RiderHomeTabNotifier(this._prefs)
+      : super(_clampHomeTab(_prefs.getInt(_kRiderHomeTab) ?? 0, _riderHomeTabMax));
+
+  final SharedPreferences _prefs;
+  static const String _kRiderHomeTab = 'rider_home_tab';
+
+  static int _clampHomeTab(int index, int max) {
+    if (index < 0) return 0;
+    if (index > max) return max;
+    return index;
+  }
+
+  void setTab(int index) {
+    final next = _clampHomeTab(index, _riderHomeTabMax);
+    state = next;
+    unawaited(_prefs.setInt(_kRiderHomeTab, next));
+  }
+}
+
+final riderHomeTabProvider =
+    StateNotifierProvider<RiderHomeTabNotifier, int>((ref) {
+  return RiderHomeTabNotifier(ref.watch(sharedPreferencesProvider));
+});
+
+final riderApiProvider =
+    Provider<RiderApi>((ref) => RiderApi(baseUrl: kApiBaseUrl));
+
+final sessionProvider =
+    StateNotifierProvider<SessionNotifier, RiderSession?>((ref) {
+  return SessionNotifier(
+    ref.watch(riderApiProvider),
+    ref.watch(sharedPreferencesProvider),
+  );
 });
 
 final socketProvider = Provider<io.Socket?>((ref) {
@@ -132,11 +219,12 @@ final socketProvider = Provider<io.Socket?>((ref) {
   return socket;
 });
 
-final notificationCenterProvider = StateNotifierProvider<NotificationCenterNotifier, List<AppNotification>>((ref) {
+final notificationCenterProvider =
+    StateNotifierProvider<NotificationCenterNotifier, List<AppNotification>>(
+        (ref) {
   return NotificationCenterNotifier();
 });
 
 final unreadNotificationCountProvider = Provider<int>((ref) {
   return ref.watch(notificationCenterProvider).where((n) => !n.read).length;
 });
-

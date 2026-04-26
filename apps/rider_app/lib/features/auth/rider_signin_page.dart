@@ -16,6 +16,7 @@ class RiderSignInPage extends HookConsumerWidget {
     final phoneController = useTextEditingController(text: '9800000001');
     final emailController = useTextEditingController();
     final passwordController = useTextEditingController(text: 'Pass@123');
+    final otpController = useTextEditingController();
     final loading = useState(false);
     final error = useState<String?>(null);
     final info = useState<String?>(null);
@@ -32,9 +33,11 @@ class RiderSignInPage extends HookConsumerWidget {
       error.value = null;
       info.value = null;
       try {
+        final o = otpController.text.trim();
         await ref.read(sessionProvider.notifier).signIn(
               phone: phoneController.text.trim(),
-              password: passwordController.text,
+              password: o.isNotEmpty ? null : passwordController.text,
+              otp: o.isNotEmpty ? o : null,
             );
       } catch (e) {
         error.value = readError(e);
@@ -126,6 +129,16 @@ class RiderSignInPage extends HookConsumerWidget {
                           : Text(isRegister.value ? 'Create account' : 'Sign in'),
                     ),
                     if (!isRegister.value) ...<Widget>[
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: otpController,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                        decoration: const InputDecoration(
+                          labelText: 'One-time code (after Request OTP)',
+                          counterText: '',
+                        ),
+                      ),
                       const SizedBox(height: 8),
                       OutlinedButton(
                         onPressed: loading.value ? null : requestOtp,

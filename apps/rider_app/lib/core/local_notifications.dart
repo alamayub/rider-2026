@@ -4,11 +4,14 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class LocalNotificationsService {
-  static final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  static final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
-  static final StreamController<Map<String, dynamic>> _tapController = StreamController<Map<String, dynamic>>.broadcast();
+  static final StreamController<Map<String, dynamic>> _tapController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
-  static Stream<Map<String, dynamic>> get onNotificationTap => _tapController.stream;
+  static Stream<Map<String, dynamic>> get onNotificationTap =>
+      _tapController.stream;
 
   static const AndroidNotificationChannel _channel = AndroidNotificationChannel(
     'rider_app_notifications',
@@ -20,13 +23,15 @@ class LocalNotificationsService {
   static Future<void> initialize() async {
     if (_initialized) return;
 
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
       requestSoundPermission: true,
     );
-    const initSettings = InitializationSettings(android: androidSettings, iOS: iosSettings);
+    const initSettings =
+        InitializationSettings(android: androidSettings, iOS: iosSettings);
     await _plugin.initialize(
       settings: initSettings,
       onDidReceiveNotificationResponse: (response) {
@@ -45,11 +50,13 @@ class LocalNotificationsService {
       },
     );
 
-    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
     await androidPlugin?.createNotificationChannel(_channel);
     await androidPlugin?.requestNotificationsPermission();
 
-    final iosPlugin = _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+    final iosPlugin = _plugin.resolvePlatformSpecificImplementation<
+        IOSFlutterLocalNotificationsPlugin>();
     await iosPlugin?.requestPermissions(alert: true, badge: true, sound: true);
 
     _initialized = true;
@@ -81,8 +88,8 @@ class LocalNotificationsService {
 
   static Future<void> showFromRemoteMessage(RemoteMessage message) async {
     final title = message.notification?.title ?? 'Rider notification';
-    final body = message.notification?.body ?? (message.data.isEmpty ? 'New update' : message.data.toString());
+    final body = message.notification?.body ??
+        (message.data.isEmpty ? 'New update' : message.data.toString());
     await show(title: title, body: body, data: message.data);
   }
 }
-

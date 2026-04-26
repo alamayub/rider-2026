@@ -8,12 +8,26 @@ import '../../core/driver_api.dart';
 import '../../core/local_notifications.dart';
 import '../../core/providers.dart';
 
+/// First assigned ride that is not finished and not already in progress (driver enters OTP to start).
+String? _pickRideIdForOtpStart(Object? rides) {
+  if (rides is! List || rides.isEmpty) return null;
+  const skip = <String>{'completed', 'cancelled', 'in_progress'};
+  for (final dynamic raw in rides) {
+    final m = Map<String, dynamic>.from(raw as Map);
+    final st = (m['status'] ?? '').toString();
+    if (skip.contains(st)) continue;
+    final id = (m['id'] ?? '').toString();
+    if (id.isNotEmpty) return id;
+  }
+  return null;
+}
+
 class DriverHomePage extends HookConsumerWidget {
   const DriverHomePage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final tab = useState(0);
+    final homeTab = ref.watch(driverHomeTabProvider);
     final session = ref.watch(sessionProvider)!;
     final api = ref.watch(driverApiProvider);
     final socket = ref.watch(socketProvider);
@@ -140,24 +154,25 @@ class DriverHomePage extends HookConsumerWidget {
         final keys = payload.keys.map((k) => k.toLowerCase()).toSet();
         final valuesJoined = payload.values.map((v) => v.toString().toLowerCase()).join(' ');
 
+        final tabs = ref.read(driverHomeTabProvider.notifier);
         if (type == 'message' || type == 'chat' || type == 'push-message') {
-          tab.value = 3;
+          tabs.setTab(3);
         } else if (type == 'ride' || type == 'trip' || type == 'dispatch') {
-          tab.value = 1;
+          tabs.setTab(1);
         } else if (type == 'kyc' || type == 'vehicle') {
-          tab.value = 2;
+          tabs.setTab(2);
         } else if (type == 'rating' || type == 'review') {
-          tab.value = 4;
+          tabs.setTab(4);
         } else if (keys.contains('conversationid') || keys.contains('messageid') || valuesJoined.contains('message')) {
-          tab.value = 3;
+          tabs.setTab(3);
         } else if (keys.contains('rideid') || valuesJoined.contains('ride')) {
-          tab.value = 1;
+          tabs.setTab(1);
         } else if (keys.contains('kycid') || keys.contains('vehicletypeid') || valuesJoined.contains('vehicle') || valuesJoined.contains('kyc')) {
-          tab.value = 2;
+          tabs.setTab(2);
         } else if (keys.contains('rating') || valuesJoined.contains('rating')) {
-          tab.value = 4;
+          tabs.setTab(4);
         } else {
-          tab.value = 0;
+          tabs.setTab(0);
         }
       });
       return sub.cancel;
@@ -189,10 +204,11 @@ class DriverHomePage extends HookConsumerWidget {
           ),
         ],
       ),
-      body: pages[tab.value],
+      body: pages[homeTab],
       bottomNavigationBar: NavigationBar(
-        selectedIndex: tab.value,
-        onDestinationSelected: (i) => tab.value = i,
+        selectedIndex: homeTab,
+        onDestinationSelected: (i) =>
+            ref.read(driverHomeTabProvider.notifier).setTab(i),
         destinations: const <NavigationDestination>[
           NavigationDestination(icon: Icon(Icons.dashboard), label: 'Overview'),
           NavigationDestination(icon: Icon(Icons.local_taxi), label: 'Rides'),
@@ -270,15 +286,29 @@ class _RidesTab extends HookConsumerWidget {
       final rideId = rideIdController.text.trim();
       if (rideId.isEmpty) return;
       lastError.value = null;
+      final status = statusController.text.trim();
+      final otp = otpController.text.trim();
+      if (status == 'in_progress' && otp.isEmpty) {
+        lastError.value = 'Enter the 6-digit code the rider gives you.';
+        return;
+      }
       try {
         lastResult.value = await api.updateRideStatus(
           rideId: rideId,
-          status: statusController.text.trim(),
-          otp: otpController.text.trim(),
+          status: status,
+          otp: otp,
         );
         refresh.value++;
       } catch (e) {
         lastError.value = e.toString();
+      }
+    }
+
+    void fillRideIdFromMyRides() {
+      final id = _pickRideIdForOtpStart(ridesSnap.data);
+      if (id != null) {
+        rideIdController.text = id;
+        statusController.text = 'in_progress';
       }
     }
 
@@ -314,12 +344,45 @@ class _RidesTab extends HookConsumerWidget {
         const SizedBox(height: 8),
         ElevatedButton(onPressed: sendLocation, child: Text('Send Location Ping (${pingCount.value})')),
         const Divider(height: 26),
-        const Text('Ride Status Update', style: TextStyle(fontWeight: FontWeight.bold)),
+        Text(
+          'Start trip',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Ask the rider for their trip code, then enter it here. Status should be in_progress.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: ridesSnap.connectionState == ConnectionState.done ? fillRideIdFromMyRides : null,
+          icon: const Icon(Icons.playlist_add),
+          label: const Text('Fill ride ID from my rides (first active)'),
+        ),
+        const SizedBox(height: 8),
+        const Text('Ride status (all transitions)', style: TextStyle(fontWeight: FontWeight.bold)),
         TextField(controller: rideIdController, decoration: const InputDecoration(labelText: 'Ride ID')),
         TextField(controller: statusController, decoration: const InputDecoration(labelText: 'Status (accepted/in_progress/completed/...)')),
-        TextField(controller: otpController, decoration: const InputDecoration(labelText: 'OTP (required for in_progress)')),
+        TextField(
+          controller: otpController,
+          keyboardType: TextInputType.number,
+          maxLength: 6,
+          decoration: const InputDecoration(
+            labelText: "Rider's 6-digit trip code",
+            counterText: '',
+            hintText: '000000',
+          ),
+        ),
         const SizedBox(height: 8),
-        ElevatedButton(onPressed: updateStatus, child: const Text('Update Ride Status')),
+        ElevatedButton(onPressed: updateStatus, child: const Text('Update ride status')),
+        const SizedBox(height: 4),
+        FilledButton(
+          onPressed: () {
+            statusController.text = 'in_progress';
+            updateStatus();
+          },
+          child: const Text('Start trip (in_progress + code)'),
+        ),
         if (lastError.value != null) Text(lastError.value!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
         if (lastResult.value != null) _JsonPanel(title: 'Last Ride Action Result', data: lastResult.value),
         const SizedBox(height: 8),

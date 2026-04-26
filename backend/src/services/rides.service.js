@@ -7,6 +7,7 @@ import {
   findVehicleTypeById,
   incrementCouponUsage,
   insertRideEvent,
+  listCities,
   listVehicleTypes,
   markRideStartOtpVerified,
   listRidesByUserRole,
@@ -17,6 +18,50 @@ import { ensureDriverPayoutsAfterRideCompleted } from './payments.service.js';
 
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+/**
+ * Hides `rideStartOtp` from drivers and after verification / terminal states.
+ * Riders see the code until they share it with the driver and the trip goes in_progress (verified).
+ */
+export function toRideResponseForUser(ride, userId, role) {
+  if (!ride) return null;
+  const out = { ...ride };
+  const uid = String(userId);
+  const rRole = String(role || '');
+  const isRider = rRole === 'rider' && String(ride.riderId) === uid;
+  const isDriver = rRole === 'driver' && ride.driverId != null && String(ride.driverId) === uid;
+  const isAdmin = rRole === 'admin';
+
+  if (isAdmin) {
+    return out;
+  }
+
+  const otpVerified = out.rideStartOtpVerifiedAt != null && String(out.rideStartOtpVerifiedAt).trim() !== '';
+  const terminal = ['completed', 'cancelled'].includes(String(out.status));
+
+  if (!isRider && !isDriver) {
+    delete out.rideStartOtp;
+    return out;
+  }
+  if (isDriver || otpVerified || terminal) {
+    delete out.rideStartOtp;
+    return out;
+  }
+  return out;
+}
+
+export async function getRideByIdForUser(rideId, userId, role) {
+  const ride = await findRideById(rideId);
+  if (!ride) return null;
+  const uid = String(userId);
+  const isRider = String(ride.riderId) === uid;
+  const isDriver = ride.driverId != null && String(ride.driverId) === uid;
+  const isAdmin = String(role) === 'admin';
+  if (!isRider && !isDriver && !isAdmin) {
+    throw new Error('FORBIDDEN_GET_RIDE');
+  }
+  return toRideResponseForUser(ride, userId, role);
 }
 
 export async function estimateFare({ cityId, distanceKm, vehicleTypeId }) {
@@ -133,6 +178,15 @@ export async function listRidesByUser(userId, role) {
   return listRidesByUserRole(userId, role);
 }
 
+export async function listRidesByUserForViewer(userId, role) {
+  const rides = await listRidesByUserRole(userId, role);
+  return rides.map((r) => toRideResponseForUser(r, userId, role));
+}
+
 export async function listAvailableVehicleTypes() {
   return listVehicleTypes({ onlyActive: true });
+}
+
+export async function listBookingCities() {
+  return listCities();
 }
