@@ -32,6 +32,8 @@ export const api = createApi({
     'Messages',
     'Cities',
     'VehicleTypes',
+    'Coupons',
+    'Offers',
   ],
   endpoints: (builder) => ({
     health: builder.query({
@@ -91,6 +93,46 @@ export const api = createApi({
         method: 'DELETE',
       }),
       invalidatesTags: () => [{ type: 'VehicleTypes', id: 'LIST' }],
+    }),
+    coupons: builder.query({
+      query: () => '/admin/coupons',
+      providesTags: [{ type: 'Coupons', id: 'LIST' }],
+    }),
+    createCoupon: builder.mutation({
+      query: (body) => ({ url: '/admin/coupons', method: 'POST', body }),
+      invalidatesTags: () => [{ type: 'Coupons', id: 'LIST' }],
+    }),
+    updateCoupon: builder.mutation({
+      query: ({ couponId, ...body }) => ({
+        url: `/admin/coupons/${encodeURIComponent(couponId)}`,
+        method: 'PATCH',
+        body,
+      }),
+      invalidatesTags: () => [{ type: 'Coupons', id: 'LIST' }],
+    }),
+    deleteCoupon: builder.mutation({
+      query: (couponId) => ({ url: `/admin/coupons/${encodeURIComponent(couponId)}`, method: 'DELETE' }),
+      invalidatesTags: () => [{ type: 'Coupons', id: 'LIST' }],
+    }),
+    offers: builder.query({
+      query: () => '/admin/offers',
+      providesTags: [{ type: 'Offers', id: 'LIST' }],
+    }),
+    createOffer: builder.mutation({
+      query: (body) => ({ url: '/admin/offers', method: 'POST', body }),
+      invalidatesTags: () => [{ type: 'Offers', id: 'LIST' }],
+    }),
+    updateOffer: builder.mutation({
+      query: ({ offerId, ...body }) => ({
+        url: `/admin/offers/${encodeURIComponent(offerId)}`,
+        method: 'PATCH',
+        body,
+      }),
+      invalidatesTags: () => [{ type: 'Offers', id: 'LIST' }],
+    }),
+    deleteOffer: builder.mutation({
+      query: (offerId) => ({ url: `/admin/offers/${encodeURIComponent(offerId)}`, method: 'DELETE' }),
+      invalidatesTags: () => [{ type: 'Offers', id: 'LIST' }],
     }),
     liveRides: builder.query({
       query: () => '/admin/rides/live',
@@ -225,6 +267,14 @@ export const {
   useCreateVehicleTypeMutation,
   useUpdateVehicleTypeMutation,
   useDeleteVehicleTypeMutation,
+  useCouponsQuery,
+  useCreateCouponMutation,
+  useUpdateCouponMutation,
+  useDeleteCouponMutation,
+  useOffersQuery,
+  useCreateOfferMutation,
+  useUpdateOfferMutation,
+  useDeleteOfferMutation,
   useLazyAdminAnalyticsQuery,
   useLazyLiveRidesQuery,
   useLazyReportsQuery,

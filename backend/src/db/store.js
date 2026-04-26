@@ -2283,6 +2283,124 @@ export async function findCouponByCode(code) {
   return rows[0] || null;
 }
 
+export async function findCouponById(couponId) {
+  const n = String(couponId);
+  if (env.dbClient === 'memory') {
+    return memory.coupons.find((c) => String(c.id) === n) || null;
+  }
+  const [rows] = await pool.query(
+    `SELECT id, code, discount_type AS discountType, discount_value AS discountValue, max_discount AS maxDiscount, min_fare AS minFare, starts_at AS startsAt, ends_at AS endsAt,
+            usage_limit AS usageLimit, used_count AS usedCount, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt
+     FROM coupons WHERE id = ? LIMIT 1`,
+    [couponId]
+  );
+  return rows[0] || null;
+}
+
+function couponRedemptionCountInMemory(couponId) {
+  return memory.couponRedemptions.filter((r) => String(r.couponId) === String(couponId)).length;
+}
+
+export async function updateCouponRecord(couponId, data, actorUserId) {
+  const existing = await findCouponById(couponId);
+  if (!existing) {
+    throw new Error('Coupon not found');
+  }
+  if (data.discountType != null && !['percentage', 'fixed'].includes(data.discountType)) {
+    throw new Error('discountType must be percentage or fixed');
+  }
+  const actorId = actorOrSystem(actorUserId);
+  const updatedAt = now();
+  const next = {
+    ...existing,
+    code: data.code != null ? String(data.code).toUpperCase().trim() : existing.code,
+    discountType: data.discountType != null ? data.discountType : existing.discountType,
+    discountValue: data.discountValue != null ? Number(data.discountValue) : existing.discountValue,
+    maxDiscount: data.maxDiscount !== undefined ? (data.maxDiscount == null ? null : Number(data.maxDiscount)) : existing.maxDiscount,
+    minFare: data.minFare != null ? Number(data.minFare) : existing.minFare,
+    startsAt: data.startsAt != null ? toMySqlDateTime(data.startsAt) : existing.startsAt,
+    endsAt: data.endsAt != null ? toMySqlDateTime(data.endsAt) : existing.endsAt,
+    usageLimit: data.usageLimit != null ? Number(data.usageLimit) : existing.usageLimit,
+    isActive: data.isActive !== undefined ? Boolean(data.isActive) : existing.isActive
+  };
+  if (Number(next.usageLimit) > 0 && Number(next.usageLimit) < Number(existing.usedCount)) {
+    throw new Error('Usage limit cannot be less than the number of times the coupon was already used');
+  }
+
+  if (env.dbClient === 'memory') {
+    const i = memory.coupons.findIndex((c) => String(c.id) === String(couponId));
+    if (i < 0) {
+      throw new Error('Coupon not found');
+    }
+    const otherCode = memory.coupons.some((c, j) => j !== i && String(c.code) === String(next.code));
+    if (otherCode) {
+      throw new Error('Another coupon already uses this code');
+    }
+    memory.coupons[i] = { ...memory.coupons[i], ...next, updatedAt, updatedBy: actorId };
+    return findCouponById(memory.coupons[i].id);
+  }
+
+  const [codeConflict] = await pool.query('SELECT id FROM coupons WHERE code = ? AND id != ? LIMIT 1', [next.code, existing.id]);
+  if (codeConflict && codeConflict[0]) {
+    throw new Error('Another coupon already uses this code');
+  }
+  await pool.query(
+    `UPDATE coupons SET code = ?, discount_type = ?, discount_value = ?, max_discount = ?, min_fare = ?,
+     starts_at = ?, ends_at = ?, usage_limit = ?, is_active = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+    [
+      next.code,
+      next.discountType,
+      next.discountValue,
+      next.maxDiscount,
+      next.minFare,
+      next.startsAt,
+      next.endsAt,
+      next.usageLimit,
+      next.isActive,
+      updatedAt,
+      actorId,
+      existing.id
+    ]
+  );
+  const after = await findCouponById(existing.id);
+  await createAuditLogRecord({ entityType: 'coupon', entityId: String(existing.id), action: 'update', actorUserId: actorId, beforeState: existing, afterState: after });
+  return after;
+}
+
+export async function deleteCouponRecord(couponId, actorUserId) {
+  const existing = await findCouponById(couponId);
+  if (!existing) {
+    throw new Error('Coupon not found');
+  }
+  const id = existing.id;
+  if (env.dbClient === 'memory') {
+    if (couponRedemptionCountInMemory(id) > 0) {
+      throw new Error('Cannot delete a coupon that has redemptions');
+    }
+    const i = memory.coupons.findIndex((c) => String(c.id) === String(couponId));
+    if (i >= 0) memory.coupons.splice(i, 1);
+    return { deleted: true, id: String(id) };
+  }
+  const [redemptionRows] = await pool.query('SELECT COUNT(*) AS c FROM coupon_redemptions WHERE coupon_id = ?', [id]);
+  if (toNum(redemptionRows[0].c) > 0) {
+    throw new Error('Cannot delete a coupon that has redemptions');
+  }
+  const [r] = await pool.query('DELETE FROM coupons WHERE id = ?', [id]);
+  if (r.affectedRows === 0) {
+    throw new Error('Coupon not found');
+  }
+  const actorId = actorOrSystem(actorUserId);
+  await createAuditLogRecord({
+    entityType: 'coupon',
+    entityId: String(id),
+    action: 'delete',
+    actorUserId: actorId,
+    beforeState: existing,
+    afterState: null
+  });
+  return { deleted: true, id: String(id) };
+}
+
 export async function incrementCouponUsage(couponId, actorUserId) {
   const actorId = actorOrSystem(actorUserId);
   if (env.dbClient === 'memory') {
@@ -2390,6 +2508,103 @@ export async function listActiveOffers(cityId) {
     [current, current, cityId || null, cityId || null]
   );
   return rows;
+}
+
+export async function listOffers() {
+  if (env.dbClient === 'memory') {
+    return [...memory.offers].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+  const [rows] = await pool.query(
+    `SELECT id, title, description, city_id AS cityId, starts_at AS startsAt, ends_at AS endsAt, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt
+     FROM offers
+     ORDER BY created_at DESC`
+  );
+  return rows;
+}
+
+export async function findOfferById(offerId) {
+  const n = String(offerId);
+  if (env.dbClient === 'memory') {
+    return memory.offers.find((o) => String(o.id) === n) || null;
+  }
+  const [rows] = await pool.query(
+    `SELECT id, title, description, city_id AS cityId, starts_at AS startsAt, ends_at AS endsAt, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt
+     FROM offers WHERE id = ? LIMIT 1`,
+    [offerId]
+  );
+  return rows[0] || null;
+}
+
+export async function updateOfferRecord(offerId, data, actorUserId) {
+  const existing = await findOfferById(offerId);
+  if (!existing) {
+    throw new Error('Offer not found');
+  }
+  const actorId = actorOrSystem(actorUserId);
+  const updatedAt = now();
+  const next = {
+    ...existing,
+    title: data.title != null ? String(data.title).trim() : existing.title,
+    description: data.description !== undefined ? (data.description == null ? '' : String(data.description)) : existing.description,
+    cityId: data.cityId !== undefined ? (data.cityId == null || data.cityId === '' ? null : data.cityId) : existing.cityId,
+    startsAt: data.startsAt != null ? toMySqlDateTime(data.startsAt) : existing.startsAt,
+    endsAt: data.endsAt != null ? toMySqlDateTime(data.endsAt) : existing.endsAt,
+    isActive: data.isActive !== undefined ? Boolean(data.isActive) : existing.isActive
+  };
+
+  if (env.dbClient === 'memory') {
+    const i = memory.offers.findIndex((o) => String(o.id) === String(offerId));
+    if (i < 0) {
+      throw new Error('Offer not found');
+    }
+    memory.offers[i] = { ...memory.offers[i], ...next, updatedAt, updatedBy: actorId };
+    return findOfferById(memory.offers[i].id);
+  }
+  await pool.query(
+    `UPDATE offers SET title = ?, description = ?, city_id = ?, starts_at = ?, ends_at = ?, is_active = ?,
+     updated_at = ?, updated_by = ? WHERE id = ?`,
+    [
+      next.title,
+      next.description,
+      next.cityId,
+      next.startsAt,
+      next.endsAt,
+      next.isActive,
+      updatedAt,
+      actorId,
+      existing.id
+    ]
+  );
+  const after = await findOfferById(existing.id);
+  await createAuditLogRecord({ entityType: 'offer', entityId: String(existing.id), action: 'update', actorUserId: actorId, beforeState: existing, afterState: after });
+  return after;
+}
+
+export async function deleteOfferRecord(offerId, actorUserId) {
+  const existing = await findOfferById(offerId);
+  if (!existing) {
+    throw new Error('Offer not found');
+  }
+  const id = existing.id;
+  if (env.dbClient === 'memory') {
+    const i = memory.offers.findIndex((o) => String(o.id) === String(offerId));
+    if (i >= 0) memory.offers.splice(i, 1);
+    return { deleted: true, id: String(id) };
+  }
+  const [r] = await pool.query('DELETE FROM offers WHERE id = ?', [id]);
+  if (r.affectedRows === 0) {
+    throw new Error('Offer not found');
+  }
+  const actorId = actorOrSystem(actorUserId);
+  await createAuditLogRecord({
+    entityType: 'offer',
+    entityId: String(id),
+    action: 'delete',
+    actorUserId: actorId,
+    beforeState: existing,
+    afterState: null
+  });
+  return { deleted: true, id: String(id) };
 }
 
 export async function createPenaltyRecord({ userId, rideId, amount, reason, actorUserId }) {

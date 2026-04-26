@@ -1,4 +1,12 @@
-import { createCouponRecord, createCouponRedemptionRecord, findCouponByCode, incrementCouponUsage, listCoupons } from '../db/store.js';
+import {
+  createCouponRecord,
+  createCouponRedemptionRecord,
+  deleteCouponRecord,
+  findCouponByCode,
+  incrementCouponUsage,
+  listCoupons,
+  updateCouponRecord
+} from '../db/store.js';
 
 export async function createCoupon(payload, actorUserId) {
   if (!payload.code || !payload.discountType || payload.discountValue == null || !payload.startsAt || !payload.endsAt) {
@@ -12,6 +20,14 @@ export async function createCoupon(payload, actorUserId) {
 
 export async function getCoupons() {
   return listCoupons();
+}
+
+export async function updateCoupon(couponId, payload, actorUserId) {
+  return updateCouponRecord(couponId, payload, actorUserId);
+}
+
+export async function removeCoupon(couponId, actorUserId) {
+  return deleteCouponRecord(couponId, actorUserId);
 }
 
 export async function validateCoupon({ code, fare }) {

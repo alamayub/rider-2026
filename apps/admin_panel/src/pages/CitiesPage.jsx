@@ -2,6 +2,33 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useCitiesQuery, useCreateCityMutation, useUpdateCityMutation, useDeleteCityMutation } from '../services/api'
 import { FiEdit2, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 
+/** Preset list for the city form; region-first, then other common ISO 4217 codes. */
+const CITY_CURRENCY_CHOICES = [
+  { value: 'NPR', label: 'NPR – Nepalese rupee' },
+  { value: 'INR', label: 'INR – Indian rupee' },
+  { value: 'USD', label: 'USD – US dollar' },
+  { value: 'EUR', label: 'EUR – Euro' },
+  { value: 'GBP', label: 'GBP – British pound' },
+  { value: 'AED', label: 'AED – UAE dirham' },
+  { value: 'SAR', label: 'SAR – Saudi riyal' },
+  { value: 'QAR', label: 'QAR – Qatari riyal' },
+  { value: 'BDT', label: 'BDT – Bangladeshi taka' },
+  { value: 'PKR', label: 'PKR – Pakistani rupee' },
+  { value: 'LKR', label: 'LKR – Sri Lankan rupee' },
+  { value: 'THB', label: 'THB – Thai baht' },
+  { value: 'SGD', label: 'SGD – Singapore dollar' },
+  { value: 'MYR', label: 'MYR – Malaysian ringgit' },
+  { value: 'IDR', label: 'IDR – Indonesian rupiah' },
+  { value: 'PHP', label: 'PHP – Philippine peso' },
+  { value: 'JPY', label: 'JPY – Japanese yen' },
+  { value: 'KRW', label: 'KRW – South Korean won' },
+  { value: 'CNY', label: 'CNY – Chinese yuan' },
+  { value: 'AUD', label: 'AUD – Australian dollar' },
+  { value: 'NZD', label: 'NZD – New Zealand dollar' },
+  { value: 'CAD', label: 'CAD – Canadian dollar' },
+  { value: 'CHF', label: 'CHF – Swiss franc' },
+]
+
 const defaultForm = {
   name: '',
   code: '',
@@ -16,7 +43,7 @@ function toPayload(form) {
   return {
     name: form.name.trim(),
     code: form.code.trim() || undefined,
-    currency: form.currency.trim() || 'NPR',
+    currency: (form.currency.trim() || 'NPR').toUpperCase(),
     baseFare: Number(form.baseFare) || 0,
     perKm: Number(form.perKm) || 0,
     supportNumber: form.supportNumber.trim() || null,
@@ -29,7 +56,9 @@ function formFromCity(row) {
   return {
     name: row.name ?? '',
     code: row.code ?? '',
-    currency: row.currency ?? 'NPR',
+    currency: String(row.currency ?? 'NPR')
+      .trim()
+      .toUpperCase() || 'NPR',
     baseFare: String(row.baseFare ?? row.base_fare ?? ''),
     perKm: String(row.perKm ?? row.per_km ?? ''),
     supportNumber: row.supportNumber != null ? String(row.supportNumber) : row.support_number != null ? String(row.support_number) : '',
@@ -38,6 +67,15 @@ function formFromCity(row) {
 }
 
 function CityFormFields({ form, setForm }) {
+  const currencyOptions = useMemo(() => {
+    const c = (form.currency || 'NPR').trim().toUpperCase()
+    const inList = CITY_CURRENCY_CHOICES.some((o) => o.value === c)
+    if (c && !inList) {
+      return [{ value: c, label: `${c} (saved in database)` }, ...CITY_CURRENCY_CHOICES]
+    }
+    return CITY_CURRENCY_CHOICES
+  }, [form.currency])
+
   return (
     <>
       <label className="text-sm text-slate-600">
@@ -61,11 +99,17 @@ function CityFormFields({ form, setForm }) {
       </label>
       <label className="text-sm text-slate-600">
         <span className="text-xs text-slate-500">Currency</span>
-        <input
-          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-slate-900"
-          value={form.currency}
+        <select
+          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-900"
+          value={(form.currency || 'NPR').trim() ? (form.currency || 'NPR').trim().toUpperCase() : 'NPR'}
           onChange={(ev) => setForm((f) => ({ ...f, currency: ev.target.value }))}
-        />
+        >
+          {currencyOptions.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </label>
       <label className="text-sm text-slate-600">
         <span className="text-xs text-slate-500">Base fare</span>

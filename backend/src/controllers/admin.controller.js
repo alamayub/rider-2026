@@ -16,6 +16,8 @@ import {
   updateCity,
   updateVehicleType
 } from '../services/admin.service.js';
+import { createCoupon, getCoupons, removeCoupon, updateCoupon } from '../services/coupons.service.js';
+import { createOffer, getAllOffers, removeOffer, updateOffer } from '../services/offers.service.js';
 
 export async function getCitiesController(_req, res) {
   return res.json(await getCities());
@@ -153,4 +155,72 @@ export async function userAccountActionsController(req, res) {
 
 export async function rebuildCountersController(req, res) {
   return res.json(await rebuildCounters(req.user.sub));
+}
+
+export async function listAdminCouponsController(_req, res) {
+  return res.json(await getCoupons());
+}
+
+export async function createAdminCouponController(req, res) {
+  try {
+    return res.status(201).json(await createCoupon(req.body, req.user.sub));
+  } catch (error) {
+    return res.status(400).json({ error: error.message || 'Failed to create coupon' });
+  }
+}
+
+export async function updateAdminCouponController(req, res) {
+  try {
+    return res.json(await updateCoupon(req.params.couponId, req.body, req.user.sub));
+  } catch (error) {
+    if (error.message === 'Coupon not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message || 'Failed to update coupon' });
+  }
+}
+
+export async function deleteAdminCouponController(req, res) {
+  try {
+    return res.json(await removeCoupon(req.params.couponId, req.user.sub));
+  } catch (error) {
+    if (error.message === 'Coupon not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message || 'Failed to delete coupon' });
+  }
+}
+
+export async function listAdminOffersController(_req, res) {
+  return res.json(await getAllOffers());
+}
+
+export async function createAdminOfferController(req, res) {
+  try {
+    return res.status(201).json(await createOffer(req.body, req.user.sub));
+  } catch (error) {
+    return res.status(400).json({ error: error.message || 'Failed to create offer' });
+  }
+}
+
+export async function updateAdminOfferController(req, res) {
+  try {
+    return res.json(await updateOffer(req.params.offerId, req.body, req.user.sub));
+  } catch (error) {
+    if (error.message === 'Offer not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message || 'Failed to update offer' });
+  }
+}
+
+export async function deleteAdminOfferController(req, res) {
+  try {
+    return res.json(await removeOffer(req.params.offerId, req.user.sub));
+  } catch (error) {
+    if (error.message === 'Offer not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message || 'Failed to delete offer' });
+  }
 }
