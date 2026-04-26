@@ -233,6 +233,9 @@ class _OverviewTab extends HookWidget {
     final liveRides = data[1] as List<dynamic>;
     final reports = data[2] as List<dynamic>;
     final logs = data[3] as List<dynamic>;
+    final counters = Map<String, dynamic>.from(
+      analytics['counters'] as Map<dynamic, dynamic>? ?? <dynamic, dynamic>{},
+    );
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
@@ -241,19 +244,226 @@ class _OverviewTab extends HookWidget {
           runSpacing: 12,
           children: <Widget>[
             _StatCard(title: 'Total Rides', value: '${analytics['totalRides'] ?? 0}'),
-            _StatCard(title: 'Total Revenue', value: '${analytics['totalRevenue'] ?? 0}'),
-            _StatCard(title: 'Commission', value: '${analytics['totalCommission'] ?? 0}'),
-            _StatCard(title: 'Active Drivers', value: '${analytics['activeDrivers'] ?? 0}'),
+            _StatCard(
+              title: 'Total Users',
+              value: '${counters['usersTotal'] ?? '—'}',
+            ),
+            _StatCard(
+              title: 'Notifications sent',
+              value: '${counters['notificationsSent'] ?? '—'}',
+            ),
+            _StatCard(
+              title: 'Commission (all time)',
+              value: '${analytics['totalCommission'] ?? 0}',
+            ),
+            if (analytics['totalParcelsDelivered'] != null)
+              _StatCard(
+                title: 'Parcels delivered (all time)',
+                value: '${analytics['totalParcelsDelivered'] ?? 0}',
+              ),
+            _StatCard(title: 'Total revenue (gross)', value: '${analytics['totalRevenue'] ?? 0}'),
             _StatCard(title: 'Live Rides', value: '${liveRides.length}'),
             _StatCard(title: 'Open Reports', value: '${reports.length}'),
           ],
         ),
+        const SizedBox(height: 16),
+        _RevenueByCitySection(analytics: analytics),
         const SizedBox(height: 16),
         _JsonPanel(title: 'Live Rides', data: liveRides),
         _JsonPanel(title: 'Recent Audit Logs', data: logs),
       ],
     );
   }
+}
+
+/// Net platform revenue by period — matches [backend] `getAdminAnalytics` `platformRevenue` / `cityRevenue`.
+String _formatNetRevenue(Object? n, {String? currencyCode}) {
+  if (n == null) {
+    return '—';
+  }
+  final v = n is num ? n.toDouble() : double.tryParse(n.toString());
+  if (v == null) {
+    return '—';
+  }
+  final prefix = (currencyCode != null && currencyCode.trim().isNotEmpty) ? '${currencyCode.trim()} ' : '';
+  return '$prefix${v.toStringAsFixed(0)}';
+}
+
+double? _readNetForPeriod(Map<String, dynamic>? periods, String periodKey) {
+  if (periods == null) {
+    return null;
+  }
+  final bucket = periods[periodKey];
+  if (bucket is! Map) {
+    return null;
+  }
+  final m = Map<String, dynamic>.from(bucket);
+  final raw = m['netPlatformRevenue'];
+  if (raw is num) {
+    return raw.toDouble();
+  }
+  return double.tryParse(raw?.toString() ?? '');
+}
+
+class _RevenueByCitySection extends StatelessWidget {
+  const _RevenueByCitySection({required this.analytics});
+  final Map<String, dynamic> analytics;
+
+  @override
+  Widget build(BuildContext context) {
+    final cityRows = (analytics['cityRevenue'] as List<dynamic>?) ?? <dynamic>[];
+    final platformMap = analytics['platformRevenue'] as Map<dynamic, dynamic>?;
+    final platformPeriods =
+        platformMap == null ? null : Map<String, dynamic>.from(platformMap['periods'] as Map<dynamic, dynamic>? ?? <dynamic, dynamic>{});
+
+    if (platformPeriods == null && cityRows.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final textTheme = Theme.of(context).textTheme;
+    final colorScheme = Theme.of(context).colorScheme;
+
+    TableRow headerRow() {
+      return TableRow(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor)),
+        ),
+        children: <Widget>[
+          _revenueCell(context, 'City', isHeader: true, textTheme: textTheme, colorScheme: colorScheme),
+          _revenueCell(context, 'Today (net)', align: TextAlign.right, isHeader: true, textTheme: textTheme, colorScheme: colorScheme),
+          _revenueCell(context, 'This week', align: TextAlign.right, isHeader: true, textTheme: textTheme, colorScheme: colorScheme),
+          _revenueCell(context, 'This month', align: TextAlign.right, isHeader: true, textTheme: textTheme, colorScheme: colorScheme),
+          _revenueCell(context, 'This year', align: TextAlign.right, isHeader: true, textTheme: textTheme, colorScheme: colorScheme),
+          _revenueCell(context, 'All time', align: TextAlign.right, isHeader: true, textTheme: textTheme, colorScheme: colorScheme),
+        ],
+      );
+    }
+
+    TableRow dataRowForPeriods(
+      String label, {
+      required Map<String, dynamic>? periods,
+      String? currencyCode,
+      bool emphasize = false,
+    }) {
+      return TableRow(
+        children: <Widget>[
+          _revenueCell(
+            context,
+            label,
+            emphasize: emphasize,
+            textTheme: textTheme,
+            colorScheme: colorScheme,
+          ),
+          _revenueCell(
+            context,
+            _formatNetRevenue(_readNetForPeriod(periods, 'daily'), currencyCode: currencyCode),
+            align: TextAlign.right,
+            muted: !emphasize,
+            textTheme: textTheme,
+            colorScheme: colorScheme,
+          ),
+          _revenueCell(
+            context,
+            _formatNetRevenue(_readNetForPeriod(periods, 'weekly'), currencyCode: currencyCode),
+            align: TextAlign.right,
+            muted: !emphasize,
+            textTheme: textTheme,
+            colorScheme: colorScheme,
+          ),
+          _revenueCell(
+            context,
+            _formatNetRevenue(_readNetForPeriod(periods, 'monthly'), currencyCode: currencyCode),
+            align: TextAlign.right,
+            muted: !emphasize,
+            textTheme: textTheme,
+            colorScheme: colorScheme,
+          ),
+          _revenueCell(
+            context,
+            _formatNetRevenue(_readNetForPeriod(periods, 'yearly'), currencyCode: currencyCode),
+            align: TextAlign.right,
+            muted: !emphasize,
+            textTheme: textTheme,
+            colorScheme: colorScheme,
+          ),
+          _revenueCell(
+            context,
+            _formatNetRevenue(_readNetForPeriod(periods, 'all'), currencyCode: currencyCode),
+            align: TextAlign.right,
+            emphasize: emphasize,
+            textTheme: textTheme,
+            colorScheme: colorScheme,
+          ),
+        ],
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Text('Revenue by city', style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Text(
+              'Day / week / month / year / all time from stored daily rollups; amounts are net platform revenue (commission + penalties as reported).',
+              style: textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Table(
+                defaultColumnWidth: const IntrinsicColumnWidth(),
+                border: TableBorder.symmetric(inside: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.3))),
+                children: <TableRow>[
+                  headerRow(),
+                  if (platformPeriods != null)
+                    dataRowForPeriods('All cities (combined)', periods: platformPeriods, currencyCode: '', emphasize: true),
+                  ...cityRows.map((dynamic raw) {
+                    final row = Map<String, dynamic>.from(raw as Map<dynamic, dynamic>);
+                    final periods = Map<String, dynamic>.from(row['periods'] as Map<dynamic, dynamic>? ?? <dynamic, dynamic>{});
+                    final name = (row['cityName'] ?? row['cityCode'] ?? row['cityId'] ?? 'City').toString();
+                    final ccy = (row['currency'] ?? 'INR').toString();
+                    return dataRowForPeriods(name, periods: periods, currencyCode: ccy, emphasize: false);
+                  }),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Table cell for revenue grid (public for [_RevenueByCitySection] pattern).
+Widget _revenueCell(
+  BuildContext context,
+  String text, {
+  TextAlign align = TextAlign.start,
+  bool isHeader = false,
+  bool emphasize = false,
+  bool muted = false,
+  required TextTheme textTheme,
+  required ColorScheme colorScheme,
+}) {
+  final TextStyle? base = isHeader
+      ? (textTheme.labelSmall ?? textTheme.bodySmall)
+      : emphasize
+          ? (textTheme.bodyMedium ?? textTheme.bodySmall)?.copyWith(fontWeight: FontWeight.w600)
+          : textTheme.bodySmall;
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+    child: Text(
+      text,
+      textAlign: align,
+      style: base?.copyWith(
+        fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+        color: muted ? colorScheme.onSurfaceVariant : null,
+      ),
+    ),
+  );
 }
 
 class _CitiesVehiclesTab extends HookWidget {

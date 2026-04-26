@@ -13,6 +13,7 @@ import {
   updateRideStatusRecord
 } from '../db/store.js';
 import { findNearestAvailableDriver } from './dispatch.service.js';
+import { ensureDriverPayoutsAfterRideCompleted } from './payments.service.js';
 
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -118,6 +119,9 @@ export async function updateRideStatus({ rideId, status, actorUserId, otp }) {
   if (!ride) throw new Error('Ride not found');
 
   await insertRideEvent({ rideId: ride.id, type: 'status_changed', payload: { status }, actorUserId });
+  if (status === 'completed') {
+    await ensureDriverPayoutsAfterRideCompleted({ rideId: ride.id, actorUserId });
+  }
   return ride;
 }
 

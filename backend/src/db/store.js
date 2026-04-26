@@ -116,6 +116,7 @@ const memory = {
   driverDailyStats: [],
   riderDailyStats: [],
   adminDailyStats: [],
+  adminCityDailyStats: [],
   reports: [],
   accountActions: [],
   auditLogs: [],
@@ -347,6 +348,22 @@ async function migrateMySql() {
   };
 
   await applySchemaFromSqlFile();
+
+  await addColumnIfMissing('payout_ledger', 'parcel_id', 'BIGINT UNSIGNED NULL');
+  const payoutPaymentIdNullable = async () => {
+    const [rows] = await pool.query(
+      `SELECT IS_NULLABLE AS nullable
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'payout_ledger'
+         AND COLUMN_NAME = 'payment_id'`
+    );
+    if (String(rows?.[0]?.nullable || '').toUpperCase() === 'YES') return;
+    await pool.query('ALTER TABLE `payout_ledger` MODIFY COLUMN `payment_id` BIGINT UNSIGNED NULL');
+  };
+  await payoutPaymentIdNullable();
+
+  await addColumnIfMissing('admin_daily_stats', 'parcels_delivered', 'INT NOT NULL DEFAULT 0');
 
   const [freshExistingPaymentMethods] = await pool.query('SELECT COUNT(*) AS count FROM payment_methods');
   if (freshExistingPaymentMethods[0].count === 0) {
@@ -823,6 +840,125 @@ export async function createCity(data, actorUserId) {
   return city;
 }
 
+export async function updateCityRecord(cityId, data, actorUserId) {
+  const existing = await findCityById(cityId);
+  if (!existing) {
+    throw new Error('City not found');
+  }
+  const actorId = actorOrSystem(actorUserId);
+  const updatedAt = now();
+  const next = {
+    ...existing,
+    code: data.code != null ? String(data.code).trim() : existing.code,
+    name: data.name != null ? String(data.name).trim() : existing.name,
+    currency: data.currency != null ? String(data.currency).trim() : existing.currency,
+    baseFare: data.baseFare != null ? toNum(data.baseFare) : existing.baseFare,
+    perKm: data.perKm != null ? toNum(data.perKm) : existing.perKm,
+    supportNumber: data.supportNumber !== undefined ? data.supportNumber || null : existing.supportNumber,
+    taxPercent: data.taxPercent != null ? toNum(data.taxPercent) : existing.taxPercent
+  };
+
+  if (env.dbClient === 'memory') {
+    const i = memory.cities.findIndex((c) => String(c.id) === String(cityId) || String(c.code) === String(cityId));
+    if (i < 0) {
+      throw new Error('City not found');
+    }
+    const otherCode = memory.cities.some((c, j) => j !== i && String(c.code) === String(next.code));
+    if (otherCode) {
+      throw new Error('Another city already uses this code');
+    }
+    memory.cities[i] = { ...memory.cities[i], ...next, updatedAt, updatedBy: actorId };
+    return normalizeCityRow(memory.cities[i]);
+  }
+
+  const [conflict] = await pool.query('SELECT id FROM cities WHERE code = ? AND id != ? LIMIT 1', [next.code, existing.id]);
+  if (conflict && conflict[0]) {
+    throw new Error('Another city already uses this code');
+  }
+
+  await pool.query(
+    `UPDATE cities SET code = ?, name = ?, currency = ?, base_fare = ?, per_km = ?, support_number = ?, tax_percent = ?,
+     updated_at = ?, updated_by = ? WHERE id = ?`,
+    [
+      next.code,
+      next.name,
+      next.currency,
+      next.baseFare,
+      next.perKm,
+      next.supportNumber,
+      next.taxPercent,
+      updatedAt,
+      actorId,
+      existing.id
+    ]
+  );
+  const after = await findCityById(existing.id);
+  await createAuditLogRecord({ entityType: 'city', entityId: String(existing.id), action: 'update', actorUserId: actorId, beforeState: existing, afterState: after });
+  return after;
+}
+
+function normalizeCityRow(c) {
+  if (!c) return null;
+  return {
+    id: c.id,
+    code: c.code,
+    name: c.name,
+    currency: c.currency,
+    baseFare: Number(c.baseFare ?? c.base_fare),
+    perKm: Number(c.perKm ?? c.per_km),
+    supportNumber: c.supportNumber ?? c.support_number,
+    taxPercent: Number(c.taxPercent ?? c.tax_percent ?? 0)
+  };
+}
+
+export async function deleteCityRecord(cityId, actorUserId) {
+  const existing = await findCityById(cityId);
+  if (!existing) {
+    throw new Error('City not found');
+  }
+  const id = existing.id;
+  if (env.dbClient === 'memory') {
+    const inUse =
+      memory.rides.some((r) => String(r.cityId) === String(id)) ||
+      memory.parcels.some((p) => String(p.cityId) === String(id)) ||
+      memory.driverLocations.some((d) => String(d.cityId) === String(id)) ||
+      memory.offers.some((o) => o.cityId != null && String(o.cityId) === String(id));
+    if (inUse) {
+      throw new Error('Cannot delete a city that has rides, parcels, driver locations, or offers');
+    }
+    const i = memory.cities.findIndex((c) => String(c.id) === String(id));
+    if (i >= 0) memory.cities.splice(i, 1);
+    return { deleted: true, id: String(id) };
+  }
+
+  const [[rideCount], [parcelCount], [dlCount], [offerCount]] = await Promise.all([
+    pool.query('SELECT COUNT(*) AS c FROM rides WHERE city_id = ?', [id]),
+    pool.query('SELECT COUNT(*) AS c FROM parcels WHERE city_id = ?', [id]),
+    pool.query('SELECT COUNT(*) AS c FROM driver_locations WHERE city_id = ?', [id]),
+    pool.query('SELECT COUNT(*) AS c FROM offers WHERE city_id = ?', [id])
+  ]);
+  const n = toNum(rideCount?.[0]?.c) + toNum(parcelCount?.[0]?.c) + toNum(dlCount?.[0]?.c) + toNum(offerCount?.[0]?.c);
+  if (n > 0) {
+    throw new Error('Cannot delete a city that has rides, parcels, driver locations, or offers');
+  }
+
+  await pool.query('DELETE FROM admin_city_daily_stats WHERE city_id = ?', [id]);
+  const [r] = await pool.query('DELETE FROM cities WHERE id = ?', [id]);
+  if (r.affectedRows === 0) {
+    throw new Error('City not found');
+  }
+  const actorId = actorOrSystem(actorUserId);
+  await createAuditLogRecord({
+    entityType: 'city',
+    entityId: String(id),
+    action: 'delete',
+    actorUserId: actorId,
+    beforeState: existing,
+    afterState: null
+  });
+  return { deleted: true, id: String(id) };
+}
+
 export async function listOnlineDriverLocationsByCity(cityId, vehicleTypeId = null) {
   if (env.dbClient === 'memory') {
     const activeDriversForType = new Set(
@@ -998,6 +1134,7 @@ async function applyAdminDailyDelta({ statDate, delta }) {
         totalRides: 0,
         completedRides: 0,
         cancelledRides: 0,
+        parcelsDelivered: 0,
         grossBookings: 0,
         commissionEarned: 0,
         penaltiesCollected: 0,
@@ -1009,12 +1146,13 @@ async function applyAdminDailyDelta({ statDate, delta }) {
   }
 
   await pool.query(
-    `INSERT INTO admin_daily_stats (stat_date, total_rides, completed_rides, cancelled_rides, gross_bookings, commission_earned, penalties_collected, net_platform_revenue, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO admin_daily_stats (stat_date, total_rides, completed_rides, cancelled_rides, parcels_delivered, gross_bookings, commission_earned, penalties_collected, net_platform_revenue, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        total_rides = total_rides + VALUES(total_rides),
        completed_rides = completed_rides + VALUES(completed_rides),
        cancelled_rides = cancelled_rides + VALUES(cancelled_rides),
+       parcels_delivered = parcels_delivered + VALUES(parcels_delivered),
        gross_bookings = gross_bookings + VALUES(gross_bookings),
        commission_earned = commission_earned + VALUES(commission_earned),
        penalties_collected = penalties_collected + VALUES(penalties_collected),
@@ -1025,6 +1163,59 @@ async function applyAdminDailyDelta({ statDate, delta }) {
       toNum(delta.totalRides),
       toNum(delta.completedRides),
       toNum(delta.cancelledRides),
+      toNum(delta.parcelsDelivered),
+      toNum(delta.grossBookings),
+      toNum(delta.commissionEarned),
+      toNum(delta.penaltiesCollected),
+      toNum(delta.netPlatformRevenue),
+      now()
+    ]
+  );
+}
+
+async function applyAdminCityDailyDelta({ statDate, cityId, delta }) {
+  if (cityId == null || String(cityId).trim() === '') return;
+  if (env.dbClient === 'memory') {
+    upsertMemoryStat(
+      memory.adminCityDailyStats,
+      (r) => r.statDate === statDate && String(r.cityId) === String(cityId),
+      {
+        statDate,
+        cityId,
+        totalRides: 0,
+        completedRides: 0,
+        cancelledRides: 0,
+        parcelsDelivered: 0,
+        grossBookings: 0,
+        commissionEarned: 0,
+        penaltiesCollected: 0,
+        netPlatformRevenue: 0
+      },
+      delta
+    );
+    return;
+  }
+
+  await pool.query(
+    `INSERT INTO admin_city_daily_stats (stat_date, city_id, total_rides, completed_rides, cancelled_rides, parcels_delivered, gross_bookings, commission_earned, penalties_collected, net_platform_revenue, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       total_rides = total_rides + VALUES(total_rides),
+       completed_rides = completed_rides + VALUES(completed_rides),
+       cancelled_rides = cancelled_rides + VALUES(cancelled_rides),
+       parcels_delivered = parcels_delivered + VALUES(parcels_delivered),
+       gross_bookings = gross_bookings + VALUES(gross_bookings),
+       commission_earned = commission_earned + VALUES(commission_earned),
+       penalties_collected = penalties_collected + VALUES(penalties_collected),
+       net_platform_revenue = net_platform_revenue + VALUES(net_platform_revenue),
+       updated_at = VALUES(updated_at)`,
+    [
+      statDate,
+      cityId,
+      toNum(delta.totalRides),
+      toNum(delta.completedRides),
+      toNum(delta.cancelledRides),
+      toNum(delta.parcelsDelivered),
       toNum(delta.grossBookings),
       toNum(delta.commissionEarned),
       toNum(delta.penaltiesCollected),
@@ -1078,13 +1269,33 @@ function adminStatusDelta(status, fare, sign = 1) {
   return {};
 }
 
+function adminParcelRevenueDelta(fare) {
+  const gross = toNum(fare);
+  const commission = commissionAmount(fare);
+  return {
+    grossBookings: gross,
+    commissionEarned: commission,
+    netPlatformRevenue: commission,
+    parcelsDelivered: 1
+  };
+}
+
+async function recordParcelDeliveryAnalytics(parcel) {
+  const statDate = dayKey(parcel.updatedAt);
+  const delta = adminParcelRevenueDelta(parcel.fare);
+  await applyAdminDailyDelta({ statDate, delta });
+  await applyAdminCityDailyDelta({ statDate, cityId: parcel.cityId, delta });
+}
+
 async function recordRideCreatedAnalytics(ride) {
   const statDate = dayKey(ride.createdAt);
   await applyRiderDailyDelta({ statDate, riderId: ride.riderId, delta: { totalRides: 1, ...riderStatusDelta(ride.status, ride.fare, 1) } });
   if (ride.driverId) {
     await applyDriverDailyDelta({ statDate, driverId: ride.driverId, delta: { totalRides: 1, ...driverStatusDelta(ride.status, ride.fare, 1) } });
   }
-  await applyAdminDailyDelta({ statDate, delta: { totalRides: 1, ...adminStatusDelta(ride.status, ride.fare, 1) } });
+  const adminD = { totalRides: 1, ...adminStatusDelta(ride.status, ride.fare, 1) };
+  await applyAdminDailyDelta({ statDate, delta: adminD });
+  await applyAdminCityDailyDelta({ statDate, cityId: ride.cityId, delta: adminD });
 }
 
 async function recordRideStatusTransitionAnalytics(beforeRide, afterRide) {
@@ -1103,10 +1314,9 @@ async function recordRideStatusTransitionAnalytics(beforeRide, afterRide) {
       delta: mergeDelta(driverStatusDelta(beforeRide.status, beforeRide.fare, -1), driverStatusDelta(afterRide.status, afterRide.fare, 1))
     });
   }
-  await applyAdminDailyDelta({
-    statDate,
-    delta: mergeDelta(adminStatusDelta(beforeRide.status, beforeRide.fare, -1), adminStatusDelta(afterRide.status, afterRide.fare, 1))
-  });
+  const adminD = mergeDelta(adminStatusDelta(beforeRide.status, beforeRide.fare, -1), adminStatusDelta(afterRide.status, afterRide.fare, 1));
+  await applyAdminDailyDelta({ statDate, delta: adminD });
+  await applyAdminCityDailyDelta({ statDate, cityId: afterRide.cityId, delta: adminD });
 }
 
 async function recordCouponRedemptionAnalytics(redemption) {
@@ -1139,6 +1349,16 @@ async function recordPenaltyAnalytics(penalty) {
     statDate,
     delta: { penaltiesCollected: amount, netPlatformRevenue: amount }
   });
+  if (penalty.rideId) {
+    const ride = await findRideById(penalty.rideId);
+    if (ride?.cityId) {
+      await applyAdminCityDailyDelta({
+        statDate,
+        cityId: ride.cityId,
+        delta: { penaltiesCollected: amount, netPlatformRevenue: amount }
+      });
+    }
+  }
 }
 
 export async function createRideRecord({
@@ -1406,6 +1626,52 @@ export async function findPaymentById(paymentId) {
   return { ...rows[0], providerMetadata: parseJson(rows[0].providerMetadata, {}) };
 }
 
+export async function listPaymentsByRideId(rideId) {
+  if (env.dbClient === 'memory') {
+    return memory.payments
+      .filter((p) => String(p.rideId) === String(rideId))
+      .map((p) => ({ ...p, providerMetadata: p.providerMetadata || {} }));
+  }
+
+  const [rows] = await pool.query(
+    `SELECT id, ride_id AS rideId, method, provider, status, amount, currency, provider_order_id AS providerOrderId,
+            provider_payment_id AS providerPaymentId, provider_metadata AS providerMetadata, failure_code AS failureCode,
+            failure_reason AS failureReason, refunded_amount AS refundedAmount, created_at AS createdAt, updated_at AS updatedAt
+     FROM payments WHERE ride_id = ? ORDER BY created_at ASC`,
+    [rideId]
+  );
+
+  return rows.map((row) => ({ ...row, providerMetadata: parseJson(row.providerMetadata, {}) }));
+}
+
+export async function findPayoutLedgerByPaymentId(paymentId) {
+  if (env.dbClient === 'memory') {
+    const row = memory.payoutLedger.find((p) => p.paymentId != null && String(p.paymentId) === String(paymentId));
+    return row || null;
+  }
+  const [rows] = await pool.query(
+    `SELECT id, payment_id AS paymentId, parcel_id AS parcelId, driver_id AS driverId, amount, currency, status, note,
+            created_at AS createdAt, updated_at AS updatedAt
+     FROM payout_ledger WHERE payment_id = ? ORDER BY created_at DESC LIMIT 1`,
+    [paymentId]
+  );
+  return rows[0] || null;
+}
+
+export async function findPayoutLedgerByParcelId(parcelId) {
+  if (env.dbClient === 'memory') {
+    const row = memory.payoutLedger.find((p) => p.parcelId != null && String(p.parcelId) === String(parcelId));
+    return row || null;
+  }
+  const [rows] = await pool.query(
+    `SELECT id, payment_id AS paymentId, parcel_id AS parcelId, driver_id AS driverId, amount, currency, status, note,
+            created_at AS createdAt, updated_at AS updatedAt
+     FROM payout_ledger WHERE parcel_id = ? ORDER BY created_at DESC LIMIT 1`,
+    [parcelId]
+  );
+  return rows[0] || null;
+}
+
 export async function updatePaymentStatus({ paymentId, status, providerPaymentId = null, failureCode = null, failureReason = null, actorUserId }) {
   const updatedAt = now();
   const actorId = actorOrSystem(actorUserId);
@@ -1579,12 +1845,22 @@ export async function createProcessedWebhookRecord({ provider, eventId, eventTyp
   }
 }
 
-export async function createPayoutLedgerRecord({ paymentId, driverId, amount, currency = 'INR', status = 'pending', note = null, actorUserId }) {
+export async function createPayoutLedgerRecord({
+  paymentId = null,
+  parcelId = null,
+  driverId,
+  amount,
+  currency = 'INR',
+  status = 'pending',
+  note = null,
+  actorUserId
+}) {
   const actorId = actorOrSystem(actorUserId);
   const ts = now();
   const payout = {
     id: createId(),
-    paymentId,
+    paymentId: paymentId != null ? paymentId : null,
+    parcelId: parcelId != null ? parcelId : null,
     driverId,
     amount: Number(amount),
     currency,
@@ -1600,9 +1876,22 @@ export async function createPayoutLedgerRecord({ paymentId, driverId, amount, cu
     return payout;
   }
   await pool.query(
-    `INSERT INTO payout_ledger (id, payment_id, driver_id, amount, currency, status, note, created_at, updated_at, created_by, updated_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [payout.id, payout.paymentId, payout.driverId, payout.amount, payout.currency, payout.status, payout.note, payout.createdAt, payout.updatedAt, payout.createdBy, payout.updatedBy]
+    `INSERT INTO payout_ledger (id, payment_id, parcel_id, driver_id, amount, currency, status, note, created_at, updated_at, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      payout.id,
+      payout.paymentId,
+      payout.parcelId,
+      payout.driverId,
+      payout.amount,
+      payout.currency,
+      payout.status,
+      payout.note,
+      payout.createdAt,
+      payout.updatedAt,
+      payout.createdBy,
+      payout.updatedBy
+    ]
   );
   return payout;
 }
@@ -1619,7 +1908,7 @@ export async function listPayoutLedger({ driverId = null, status = null, limit =
     return list;
   }
   let sql =
-    'SELECT id, payment_id AS paymentId, driver_id AS driverId, amount, currency, status, note, created_at AS createdAt, updated_at AS updatedAt FROM payout_ledger WHERE 1=1';
+    'SELECT id, payment_id AS paymentId, parcel_id AS parcelId, driver_id AS driverId, amount, currency, status, note, created_at AS createdAt, updated_at AS updatedAt FROM payout_ledger WHERE 1=1';
   const params = [];
   if (driverId) {
     sql += ' AND driver_id = ?';
@@ -2208,9 +2497,25 @@ export async function listAdminDailyStats() {
 
   const [rows] = await pool.query(
     `SELECT stat_date AS statDate, total_rides AS totalRides, completed_rides AS completedRides, cancelled_rides AS cancelledRides,
+            parcels_delivered AS parcelsDelivered,
             gross_bookings AS grossBookings, commission_earned AS commissionEarned, penalties_collected AS penaltiesCollected,
             net_platform_revenue AS netPlatformRevenue
      FROM admin_daily_stats`
+  );
+  return rows;
+}
+
+export async function listAdminCityDailyStats() {
+  if (env.dbClient === 'memory') {
+    return memory.adminCityDailyStats;
+  }
+
+  const [rows] = await pool.query(
+    `SELECT stat_date AS statDate, city_id AS cityId, total_rides AS totalRides, completed_rides AS completedRides, cancelled_rides AS cancelledRides,
+            parcels_delivered AS parcelsDelivered,
+            gross_bookings AS grossBookings, commission_earned AS commissionEarned, penalties_collected AS penaltiesCollected,
+            net_platform_revenue AS netPlatformRevenue
+     FROM admin_city_daily_stats`
   );
   return rows;
 }
@@ -2479,6 +2784,99 @@ export async function createVehicleTypeRecord(data, actorUserId) {
   vt.id = result.insertId;
   await createAuditLogRecord({ entityType: 'vehicle_type', entityId: vt.id, action: 'create', actorUserId: actorId, beforeState: null, afterState: vt });
   return vt;
+}
+
+export async function updateVehicleTypeRecord(vehicleTypeId, data, actorUserId) {
+  const existing = await findVehicleTypeById(vehicleTypeId);
+  if (!existing) {
+    throw new Error('Vehicle type not found');
+  }
+  const actorId = actorOrSystem(actorUserId);
+  const updatedAt = now();
+  const next = {
+    ...existing,
+    code: data.code != null ? String(data.code).toLowerCase().trim() : existing.code,
+    name: data.name != null ? String(data.name).trim() : existing.name,
+    capacity: data.capacity != null ? Number(data.capacity) : existing.capacity,
+    fareMultiplier: data.fareMultiplier != null ? Number(data.fareMultiplier) : existing.fareMultiplier,
+    isActive: data.isActive !== undefined ? Boolean(data.isActive) : existing.isActive
+  };
+
+  if (env.dbClient === 'memory') {
+    const i = memory.vehicleTypes.findIndex(
+      (v) => String(v.id) === String(vehicleTypeId) || String(v.code) === String(vehicleTypeId)
+    );
+    if (i < 0) {
+      throw new Error('Vehicle type not found');
+    }
+    const otherCode = memory.vehicleTypes.some((v, j) => j !== i && String(v.code) === String(next.code));
+    if (otherCode) {
+      throw new Error('Another vehicle type already uses this code');
+    }
+    memory.vehicleTypes[i] = { ...memory.vehicleTypes[i], ...next, updatedAt, updatedBy: actorId };
+    return findVehicleTypeById(memory.vehicleTypes[i].id);
+  }
+
+  const [conflict] = await pool.query('SELECT id FROM vehicle_types WHERE code = ? AND id != ? LIMIT 1', [next.code, existing.id]);
+  if (conflict && conflict[0]) {
+    throw new Error('Another vehicle type already uses this code');
+  }
+
+  await pool.query(
+    `UPDATE vehicle_types SET code = ?, name = ?, capacity = ?, fare_multiplier = ?, is_active = ?,
+     updated_at = ?, updated_by = ? WHERE id = ?`,
+    [next.code, next.name, next.capacity, next.fareMultiplier, next.isActive, updatedAt, actorId, existing.id]
+  );
+  const after = await findVehicleTypeById(existing.id);
+  await createAuditLogRecord({ entityType: 'vehicle_type', entityId: String(existing.id), action: 'update', actorUserId: actorId, beforeState: existing, afterState: after });
+  return after;
+}
+
+export async function deleteVehicleTypeRecord(vehicleTypeId, actorUserId) {
+  const existing = await findVehicleTypeById(vehicleTypeId);
+  if (!existing) {
+    throw new Error('Vehicle type not found');
+  }
+  const id = existing.id;
+  if (env.dbClient === 'memory') {
+    const inUse =
+      memory.driverVehicles.some((v) => String(v.vehicleTypeId) === String(id)) ||
+      memory.rides.some((r) => r.vehicleTypeId != null && String(r.vehicleTypeId) === String(id)) ||
+      memory.parcels.some((p) => p.vehicleTypeId != null && String(p.vehicleTypeId) === String(id));
+    if (inUse) {
+      throw new Error('Cannot delete a vehicle type that is in use (rides, parcels, or driver vehicles)');
+    }
+    const i = memory.vehicleTypes.findIndex(
+      (v) => String(v.id) === String(id) || String(v.code) === String(vehicleTypeId)
+    );
+    if (i >= 0) memory.vehicleTypes.splice(i, 1);
+    return { deleted: true, id: String(id) };
+  }
+
+  const [dv, rv, pv] = await Promise.all([
+    pool.query('SELECT COUNT(*) AS c FROM driver_vehicles WHERE vehicle_type_id = ?', [id]),
+    pool.query('SELECT COUNT(*) AS c FROM rides WHERE vehicle_type_id = ?', [id]),
+    pool.query('SELECT COUNT(*) AS c FROM parcels WHERE vehicle_type_id = ?', [id])
+  ]);
+  const n = toNum(dv[0]?.[0]?.c) + toNum(rv[0]?.[0]?.c) + toNum(pv[0]?.[0]?.c);
+  if (n > 0) {
+    throw new Error('Cannot delete a vehicle type that is in use (rides, parcels, or driver vehicles)');
+  }
+
+  const [r] = await pool.query('DELETE FROM vehicle_types WHERE id = ?', [id]);
+  if (r.affectedRows === 0) {
+    throw new Error('Vehicle type not found');
+  }
+  const actorId = actorOrSystem(actorUserId);
+  await createAuditLogRecord({
+    entityType: 'vehicle_type',
+    entityId: String(id),
+    action: 'delete',
+    actorUserId: actorId,
+    beforeState: existing,
+    afterState: null
+  });
+  return { deleted: true, id: String(id) };
 }
 
 export async function createDriverVehicleRecord(data, actorUserId) {
@@ -2802,14 +3200,23 @@ export async function updateParcelStatusRecord({ parcelId, status, actorUserId }
   if (env.dbClient === 'memory') {
     const parcel = memory.parcels.find((p) => p.id === parcelId);
     if (!parcel) return null;
+    const wasDelivered = parcel.status === 'delivered';
     parcel.status = status;
     parcel.updatedAt = updatedAt;
     parcel.updatedBy = actorId;
+    if (status === 'delivered' && !wasDelivered) {
+      await recordParcelDeliveryAnalytics(parcel);
+    }
     return parcel;
   }
 
+  const before = await findParcelById(parcelId);
   await pool.query('UPDATE parcels SET status = ?, updated_at = ?, updated_by = ? WHERE id = ?', [status, updatedAt, actorId, parcelId]);
-  return findParcelById(parcelId);
+  const after = await findParcelById(parcelId);
+  if (after && status === 'delivered' && before?.status !== 'delivered') {
+    await recordParcelDeliveryAnalytics(after);
+  }
+  return after;
 }
 
 export async function markParcelOtpVerified({ parcelId, otpType, actorUserId }) {
@@ -3403,6 +3810,7 @@ export async function resetMemoryStore() {
       'driver_daily_stats',
       'rider_daily_stats',
       'admin_daily_stats',
+      'admin_city_daily_stats',
       'users',
       'payment_methods',
       'vehicle_types',
@@ -3432,6 +3840,10 @@ export async function resetMemoryStore() {
   memory.paymentRefunds = [];
   memory.paymentWebhooks = [];
   memory.payoutLedger = [];
+  memory.driverDailyStats = [];
+  memory.riderDailyStats = [];
+  memory.adminDailyStats = [];
+  memory.adminCityDailyStats = [];
   memory.paymentMethods = paymentMethodConfigs.map((m) => ({ ...m }));
   memory.coupons = [];
   memory.offers = [];

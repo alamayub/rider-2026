@@ -9,6 +9,7 @@ import {
   updateParcelStatusRecord
 } from '../db/store.js';
 import { findNearestAvailableDriver } from './dispatch.service.js';
+import { ensureDriverPayoutAfterParcelDelivered } from './payments.service.js';
 
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -108,6 +109,9 @@ export async function updateParcelStatus({ parcelId, status, actorUserId, otp })
   if (!parcel) throw new Error('Parcel not found');
 
   await insertParcelEvent({ parcelId: parcel.id, type: 'status_changed', payload: { status }, actorUserId });
+  if (status === 'delivered') {
+    await ensureDriverPayoutAfterParcelDelivered({ parcelId: parcel.id, actorUserId });
+  }
   return parcel;
 }
 

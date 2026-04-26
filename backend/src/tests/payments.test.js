@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { findCityById, findPayoutLedgerByPaymentId, listVehicleTypes, upsertDriverLocation } from '../db/store.js';
+import { addDriverVehicle } from '../services/driver-vehicles.service.js';
 import { signIn } from '../services/auth.service.js';
 import {
   buildWebhookSignature,
   createDriverPayout,
   createPaymentIntent,
   createRefund,
+  ensureDriverPayoutsAfterRideCompleted,
   getGroupedPaymentMethodsForApps,
   getPaymentMethodsForApps,
   getPaymentTimeline,
@@ -13,6 +16,7 @@ import {
   markPaymentStatus,
   processPaymentWebhook
 } from '../services/payments.service.js';
+import { createRide, updateRideStatus } from '../services/rides.service.js';
 import { registerDbHooks } from './test-db-hooks.js';
 
 registerDbHooks();
@@ -177,6 +181,54 @@ test('webhook processing is idempotent by provider event id', async () => {
   const timeline = await getPaymentTimeline({ paymentId: payment.id });
   assert.equal(timeline.payment.status, 'succeeded');
   assert.equal(timeline.events.filter((e) => e.type === 'payment.status.succeeded').length, 1);
+});
+
+test('ride completion creates driver payout for captured payment when webhook did not', async () => {
+  const rider = (await signIn({ phone: '+919111111120', role: 'rider', password: 'Pass@123' })).user;
+  const driver = (await signIn({ phone: '+919111111121', role: 'driver', password: 'Pass@123' })).user;
+  const vehicleTypes = await listVehicleTypes({ onlyActive: true });
+  const cabVt = vehicleTypes.find((v) => String(v.code) === 'cab') || vehicleTypes[0];
+  assert.ok(cabVt, 'vehicle type');
+  const city = await findCityById('blr');
+  assert.ok(city, 'city');
+  await addDriverVehicle({
+    driverId: driver.id,
+    vehicleTypeId: cabVt.id,
+    plateNumber: 'KA01AB9999',
+    isActive: true,
+    isDefault: true
+  });
+  await upsertDriverLocation({ driverId: driver.id, cityId: city.id, lat: 12.95, lng: 77.58, online: true });
+
+  const ride = await createRide({
+    riderId: rider.id,
+    cityId: 'blr',
+    pickup: { lat: 12.95, lng: 77.58 },
+    drop: { lat: 12.98, lng: 77.6 },
+    distanceKm: 5,
+    vehicleTypeId: cabVt.id
+  });
+  assert.ok(ride.driverId, 'matched driver');
+
+  const payment = await createPaymentIntent({
+    rideId: ride.id,
+    method: 'wallet',
+    provider: 'esewa',
+    amount: 500,
+    currency: 'NPR',
+    actorUserId: rider.id
+  });
+  await markPaymentStatus({ paymentId: payment.id, status: 'succeeded', actorUserId: rider.id });
+
+  await updateRideStatus({ rideId: ride.id, status: 'completed', actorUserId: driver.id });
+
+  const ledger = await findPayoutLedgerByPaymentId(payment.id);
+  assert.ok(ledger);
+  assert.equal(String(ledger.driverId), String(ride.driverId));
+  assert.ok(Number(ledger.amount) > 0);
+
+  const again = await ensureDriverPayoutsAfterRideCompleted({ rideId: ride.id, actorUserId: driver.id });
+  assert.equal(again.created, 0);
 });
 
 test('reconciliation returns pending payout ledger data', async () => {

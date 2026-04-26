@@ -1,5 +1,12 @@
 import { env } from '../config/env.js';
-import { getPlatformCounters, listAdminDailyStats, listDriverDailyStats, listRiderDailyStats } from '../db/store.js';
+import {
+  getPlatformCounters,
+  listAdminCityDailyStats,
+  listAdminDailyStats,
+  listCities,
+  listDriverDailyStats,
+  listRiderDailyStats
+} from '../db/store.js';
 
 function getPeriodStart(period) {
   const now = new Date();
@@ -52,6 +59,7 @@ function buildAdminPeriodStats(rows) {
     totalRides: sum(rows.map((r) => r.totalRides)),
     completedRides: sum(rows.map((r) => r.completedRides)),
     cancelledRides: sum(rows.map((r) => r.cancelledRides)),
+    parcelsDelivered: sum(rows.map((r) => Number(r?.parcelsDelivered || 0))),
     grossBookings: sum(rows.map((r) => r.grossBookings)),
     commissionEarned: sum(rows.map((r) => r.commissionEarned)),
     penaltiesCollected: sum(rows.map((r) => r.penaltiesCollected)),
@@ -91,17 +99,35 @@ export async function getRiderAnalytics(riderId) {
 
 export async function getAdminAnalytics() {
   const rows = await listAdminDailyStats();
+  const cityDayRows = await listAdminCityDailyStats();
+  const cities = await listCities();
   const counters = await getPlatformCounters();
   const all = buildAdminPeriodStats(filterByPeriod(rows, 'statDate', 'all'));
+
+  const byCity = cities.map((c) => {
+    const cRows = cityDayRows.filter((r) => String(r.cityId) === String(c.id));
+    return {
+      cityId: c.id,
+      cityCode: c.code,
+      cityName: c.name,
+      currency: c.currency,
+      periods: periodized((period) => buildAdminPeriodStats(filterByPeriod(cRows, 'statDate', period)))
+    };
+  });
 
   return {
     commissionRatePercent: env.commissionRatePercent,
     counters,
     totalRides: all.totalRides,
+    totalParcelsDelivered: all.parcelsDelivered,
     totalRevenue: all.grossBookings,
     totalCommission: all.commissionEarned,
-    periods: periodized((period) =>
-      buildAdminPeriodStats(filterByPeriod(rows, 'statDate', period))
-    )
+    platformRevenue: {
+      label: 'All cities (combined)',
+      periods: periodized((period) => buildAdminPeriodStats(filterByPeriod(rows, 'statDate', period)))
+    },
+    cityRevenue: byCity,
+    /** @deprecated use platformRevenue.periods — kept for admin_panel compatibility */
+    periods: periodized((period) => buildAdminPeriodStats(filterByPeriod(rows, 'statDate', period)))
   };
 }

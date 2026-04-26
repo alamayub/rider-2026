@@ -7,11 +7,16 @@ import {
   createPaymentRecord,
   createPaymentRefundRecord,
   createProcessedWebhookRecord,
+  findCityById,
+  findParcelById,
   findPaymentById,
+  findPayoutLedgerByParcelId,
+  findPayoutLedgerByPaymentId,
   findRideById,
   getPaymentsReconciliationSummary,
   listPaymentEvents,
   listPaymentMethods,
+  listPaymentsByRideId,
   listPayoutLedger,
   listPaymentRefunds,
   upsertPaymentMethodRecord,
@@ -129,6 +134,8 @@ export async function getPaymentTimeline({ paymentId }) {
 export async function createDriverPayout({ paymentId, driverId, amount, currency = 'INR', note, actorUserId }) {
   const payment = await findPaymentById(paymentId);
   if (!payment) throw new Error('Payment not found');
+  const existing = await findPayoutLedgerByPaymentId(paymentId);
+  if (existing) return existing;
   if (!['succeeded', 'partially_refunded', 'refunded'].includes(payment.status)) {
     throw new Error('Payout can be created only for captured payments');
   }
@@ -136,6 +143,7 @@ export async function createDriverPayout({ paymentId, driverId, amount, currency
   if (!(payoutAmount > 0)) throw new Error('Payout amount must be greater than 0');
   const payout = await createPayoutLedgerRecord({
     paymentId,
+    parcelId: null,
     driverId,
     amount: payoutAmount,
     currency,
@@ -150,6 +158,54 @@ export async function createDriverPayout({ paymentId, driverId, amount, currency
     actorUserId
   });
   return payout;
+}
+
+/** When a ride is marked completed, create any missing driver payouts for captured payments on that ride. */
+export async function ensureDriverPayoutsAfterRideCompleted({ rideId, actorUserId }) {
+  const ride = await findRideById(rideId);
+  if (!ride?.driverId) return { created: 0 };
+  const payments = await listPaymentsByRideId(rideId);
+  let created = 0;
+  for (const p of payments) {
+    if (!['succeeded', 'partially_refunded', 'refunded'].includes(p.status)) continue;
+    const existing = await findPayoutLedgerByPaymentId(p.id);
+    if (existing) continue;
+    const payoutAmount = Number(p.amount) - commissionAmount(p.amount);
+    if (!(payoutAmount > 0)) continue;
+    await createDriverPayout({
+      paymentId: p.id,
+      driverId: ride.driverId,
+      amount: payoutAmount,
+      currency: p.currency || 'INR',
+      note: 'Auto payout on ride completion',
+      actorUserId
+    });
+    created += 1;
+  }
+  return { created };
+}
+
+/** When a parcel is delivered, create a pending ledger row for the driver (parcel fares are not on the payments table). */
+export async function ensureDriverPayoutAfterParcelDelivered({ parcelId, actorUserId }) {
+  const parcel = await findParcelById(parcelId);
+  if (!parcel?.driverId) return { created: false };
+  const existing = await findPayoutLedgerByParcelId(parcelId);
+  if (existing) return { created: false, duplicate: true };
+  const payoutAmount = Number(parcel.fare) - commissionAmount(parcel.fare);
+  if (!(payoutAmount > 0)) return { created: false };
+  const city = parcel.cityId ? await findCityById(parcel.cityId) : null;
+  const currency = city?.currency || 'INR';
+  await createPayoutLedgerRecord({
+    paymentId: null,
+    parcelId: parcel.id,
+    driverId: parcel.driverId,
+    amount: payoutAmount,
+    currency,
+    status: 'pending',
+    note: 'Auto payout on parcel delivery',
+    actorUserId
+  });
+  return { created: true };
 }
 
 export async function getPaymentsReconciliation() {

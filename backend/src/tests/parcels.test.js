@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { upsertDriverLocation } from '../db/store.js';
+import { findPayoutLedgerByParcelId, upsertDriverLocation } from '../db/store.js';
 import { addDriverVehicle } from '../services/driver-vehicles.service.js';
 import { createParcel, estimateParcelFare, updateParcelStatus } from '../services/parcels.service.js';
 import { signIn } from '../services/auth.service.js';
@@ -73,4 +73,9 @@ test('parcel flow estimates fare and matches correct vehicle driver', async () =
 
   assert.equal(delivered.status, 'delivered');
   assert.ok(delivered.dropOtpVerifiedAt);
+
+  const ledger = await findPayoutLedgerByParcelId(parcel.id);
+  assert.ok(ledger);
+  assert.equal(String(ledger.driverId), String(driver.id));
+  assert.ok(Number(ledger.amount) > 0);
 });

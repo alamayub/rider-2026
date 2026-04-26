@@ -7,10 +7,14 @@ import {
   getLiveRides,
   getUserAccountActions,
   getUsers,
+  removeCity,
   searchUsersForAdmin,
   getVehicleTypes,
   rebuildCounters,
-  setUserAccountStatus
+  removeVehicleType,
+  setUserAccountStatus,
+  updateCity,
+  updateVehicleType
 } from '../services/admin.service.js';
 
 export async function getCitiesController(_req, res) {
@@ -18,8 +22,36 @@ export async function getCitiesController(_req, res) {
 }
 
 export async function createCityController(req, res) {
-  const city = await addCity(req.body, req.user.sub);
-  return res.status(201).json(city);
+  try {
+    const city = await addCity(req.body, req.user.sub);
+    return res.status(201).json(city);
+  } catch (error) {
+    return res.status(400).json({ error: error.message || 'Failed to create city' });
+  }
+}
+
+export async function updateCityController(req, res) {
+  try {
+    const city = await updateCity(req.params.cityId, req.body, req.user.sub);
+    return res.json(city);
+  } catch (error) {
+    if (error.message === 'City not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message || 'Failed to update city' });
+  }
+}
+
+export async function deleteCityController(req, res) {
+  try {
+    const result = await removeCity(req.params.cityId, req.user.sub);
+    return res.json(result);
+  } catch (error) {
+    if (error.message === 'City not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message || 'Failed to delete city' });
+  }
 }
 
 export async function getLiveRidesController(_req, res) {
@@ -48,6 +80,30 @@ export async function createVehicleTypeController(req, res) {
     return res.status(201).json(await addVehicleType({ id, code, name, capacity, fareMultiplier, isActive: req.body.isActive }, req.user.sub));
   } catch (error) {
     return res.status(400).json({ error: error.message });
+  }
+}
+
+export async function updateVehicleTypeController(req, res) {
+  try {
+    const v = await updateVehicleType(req.params.vehicleTypeId, req.body, req.user.sub);
+    return res.json(v);
+  } catch (error) {
+    if (error.message === 'Vehicle type not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message || 'Failed to update vehicle type' });
+  }
+}
+
+export async function deleteVehicleTypeController(req, res) {
+  try {
+    const result = await removeVehicleType(req.params.vehicleTypeId, req.user.sub);
+    return res.json(result);
+  } catch (error) {
+    if (error.message === 'Vehicle type not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message || 'Failed to delete vehicle type' });
   }
 }
 

@@ -209,7 +209,8 @@ CREATE TABLE IF NOT EXISTS payment_webhooks (
 
 CREATE TABLE IF NOT EXISTS payout_ledger (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  payment_id BIGINT UNSIGNED NOT NULL,
+  payment_id BIGINT UNSIGNED NULL,
+  parcel_id BIGINT UNSIGNED NULL,
   driver_id BIGINT UNSIGNED NOT NULL,
   amount DECIMAL(10,2) NOT NULL,
   currency VARCHAR(8) NOT NULL DEFAULT 'INR',
@@ -221,7 +222,8 @@ CREATE TABLE IF NOT EXISTS payout_ledger (
   updated_by VARCHAR(36) NOT NULL,
   KEY idx_payout_ledger_driver (driver_id),
   KEY idx_payout_ledger_status (status),
-  KEY idx_payout_ledger_payment (payment_id)
+  KEY idx_payout_ledger_payment (payment_id),
+  KEY idx_payout_ledger_parcel (parcel_id)
 );
 
 CREATE TABLE IF NOT EXISTS payment_methods (
@@ -402,11 +404,28 @@ CREATE TABLE IF NOT EXISTS admin_daily_stats (
   total_rides INT NOT NULL DEFAULT 0,
   completed_rides INT NOT NULL DEFAULT 0,
   cancelled_rides INT NOT NULL DEFAULT 0,
+  parcels_delivered INT NOT NULL DEFAULT 0,
   gross_bookings DECIMAL(12,2) NOT NULL DEFAULT 0,
   commission_earned DECIMAL(12,2) NOT NULL DEFAULT 0,
   penalties_collected DECIMAL(12,2) NOT NULL DEFAULT 0,
   net_platform_revenue DECIMAL(12,2) NOT NULL DEFAULT 0,
   updated_at DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_city_daily_stats (
+  stat_date DATE NOT NULL,
+  city_id BIGINT UNSIGNED NOT NULL,
+  total_rides INT NOT NULL DEFAULT 0,
+  completed_rides INT NOT NULL DEFAULT 0,
+  cancelled_rides INT NOT NULL DEFAULT 0,
+  parcels_delivered INT NOT NULL DEFAULT 0,
+  gross_bookings DECIMAL(12,2) NOT NULL DEFAULT 0,
+  commission_earned DECIMAL(12,2) NOT NULL DEFAULT 0,
+  penalties_collected DECIMAL(12,2) NOT NULL DEFAULT 0,
+  net_platform_revenue DECIMAL(12,2) NOT NULL DEFAULT 0,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (stat_date, city_id),
+  KEY idx_admin_city_daily_city (city_id)
 );
 
 CREATE TABLE IF NOT EXISTS conversations (

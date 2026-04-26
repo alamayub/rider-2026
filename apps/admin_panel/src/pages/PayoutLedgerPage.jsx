@@ -118,7 +118,7 @@ function PayoutLedgerPage() {
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-3 sm:px-5">ID</th>
-                  <th className="px-4 py-3">Payment</th>
+                  <th className="px-4 py-3">Payment / parcel</th>
                   <th className="px-4 py-3">Driver</th>
                   <th className="px-4 py-3 text-right">Amount</th>
                   <th className="px-4 py-3">Status</th>
@@ -131,7 +131,9 @@ function PayoutLedgerPage() {
                 {rows.map((row) => (
                   <tr key={String(row.id)} className="hover:bg-slate-50/80">
                     <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700 sm:px-5">{row.id}</td>
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-600">{row.paymentId}</td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-600">
+                      {row.paymentId ? row.paymentId : row.parcelId ? `parcel:${row.parcelId}` : '—'}
+                    </td>
                     <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-600">{row.driverId}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums text-slate-900">
                       {formatMoney(row.amount, row.currency || 'NPR')}

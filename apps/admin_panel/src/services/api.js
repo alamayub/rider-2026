@@ -24,7 +24,15 @@ const baseQuery = async (args, api, extraOptions) => {
 export const api = createApi({
   reducerPath: 'api',
   baseQuery,
-  tagTypes: ['Notifications', 'NotificationStats', 'GlobalNotificationStats', 'Conversations', 'Messages'],
+  tagTypes: [
+    'Notifications',
+    'NotificationStats',
+    'GlobalNotificationStats',
+    'Conversations',
+    'Messages',
+    'Cities',
+    'VehicleTypes',
+  ],
   endpoints: (builder) => ({
     health: builder.query({
       query: () => '/health',
@@ -38,6 +46,51 @@ export const api = createApi({
     }),
     adminAnalytics: builder.query({
       query: () => '/analytics/admin',
+    }),
+    cities: builder.query({
+      query: () => '/admin/cities',
+      providesTags: [{ type: 'Cities', id: 'LIST' }],
+    }),
+    createCity: builder.mutation({
+      query: (body) => ({ url: '/admin/cities', method: 'POST', body }),
+      invalidatesTags: () => [
+        { type: 'Cities', id: 'LIST' },
+      ],
+    }),
+    updateCity: builder.mutation({
+      query: ({ cityId, ...body }) => ({
+        url: `/admin/cities/${encodeURIComponent(cityId)}`,
+        method: 'PATCH',
+        body,
+      }),
+      invalidatesTags: () => [{ type: 'Cities', id: 'LIST' }],
+    }),
+    deleteCity: builder.mutation({
+      query: (cityId) => ({ url: `/admin/cities/${encodeURIComponent(cityId)}`, method: 'DELETE' }),
+      invalidatesTags: () => [{ type: 'Cities', id: 'LIST' }],
+    }),
+    vehicleTypes: builder.query({
+      query: () => '/admin/vehicle-types',
+      providesTags: [{ type: 'VehicleTypes', id: 'LIST' }],
+    }),
+    createVehicleType: builder.mutation({
+      query: (body) => ({ url: '/admin/vehicle-types', method: 'POST', body }),
+      invalidatesTags: () => [{ type: 'VehicleTypes', id: 'LIST' }],
+    }),
+    updateVehicleType: builder.mutation({
+      query: ({ vehicleTypeId, ...body }) => ({
+        url: `/admin/vehicle-types/${encodeURIComponent(vehicleTypeId)}`,
+        method: 'PATCH',
+        body,
+      }),
+      invalidatesTags: () => [{ type: 'VehicleTypes', id: 'LIST' }],
+    }),
+    deleteVehicleType: builder.mutation({
+      query: (vehicleTypeId) => ({
+        url: `/admin/vehicle-types/${encodeURIComponent(vehicleTypeId)}`,
+        method: 'DELETE',
+      }),
+      invalidatesTags: () => [{ type: 'VehicleTypes', id: 'LIST' }],
     }),
     liveRides: builder.query({
       query: () => '/admin/rides/live',
@@ -164,6 +217,14 @@ export const api = createApi({
 export const {
   useHealthQuery,
   useSignInMutation,
+  useCitiesQuery,
+  useCreateCityMutation,
+  useUpdateCityMutation,
+  useDeleteCityMutation,
+  useVehicleTypesQuery,
+  useCreateVehicleTypeMutation,
+  useUpdateVehicleTypeMutation,
+  useDeleteVehicleTypeMutation,
   useLazyAdminAnalyticsQuery,
   useLazyLiveRidesQuery,
   useLazyReportsQuery,

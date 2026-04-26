@@ -2,6 +2,10 @@ import {
   createAccountActionRecord,
   createCity,
   createVehicleTypeRecord,
+  deleteCityRecord,
+  deleteVehicleTypeRecord,
+  updateCityRecord,
+  updateVehicleTypeRecord,
   findUserById,
   listAccountActionsByUser,
   listActiveRides,
@@ -23,6 +27,14 @@ export async function addCity(payload, actorUserId) {
   return createCity(payload, actorUserId);
 }
 
+export async function updateCity(cityId, payload, actorUserId) {
+  return updateCityRecord(cityId, payload, actorUserId);
+}
+
+export async function removeCity(cityId, actorUserId) {
+  return deleteCityRecord(cityId, actorUserId);
+}
+
 export async function getLiveRides() {
   return listActiveRides();
 }
@@ -41,6 +53,14 @@ export async function getVehicleTypes() {
 
 export async function addVehicleType(payload, actorUserId) {
   return createVehicleTypeRecord(payload, actorUserId);
+}
+
+export async function updateVehicleType(vehicleTypeId, payload, actorUserId) {
+  return updateVehicleTypeRecord(vehicleTypeId, payload, actorUserId);
+}
+
+export async function removeVehicleType(vehicleTypeId, actorUserId) {
+  return deleteVehicleTypeRecord(vehicleTypeId, actorUserId);
 }
 
 export async function getUsers({ role, status, limit }) {
