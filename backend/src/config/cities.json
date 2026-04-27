@@ -1,20 +1,41 @@
 [
   {
     "id": "blr",
+    "code": "blr",
     "name": "Bengaluru",
     "currency": "INR",
     "baseFare": 60,
     "perKm": 16,
     "supportNumber": "+91-80-0000-0001",
-    "taxPercent": 5
+    "taxPercent": 5,
+    "centerLat": 12.9716,
+    "centerLng": 77.5946,
+    "serviceRadiusKm": 48
   },
   {
     "id": "hyd",
+    "code": "hyd",
     "name": "Hyderabad",
     "currency": "INR",
     "baseFare": 55,
     "perKm": 15,
     "supportNumber": "+91-40-0000-0001",
-    "taxPercent": 5
+    "taxPercent": 5,
+    "centerLat": 17.385,
+    "centerLng": 78.4867,
+    "serviceRadiusKm": 52
+  },
+  {
+    "id": "city-kathmandu",
+    "code": "city-kathmandu",
+    "name": "Kathmandu",
+    "currency": "NPR",
+    "baseFare": 80,
+    "perKm": 22,
+    "supportNumber": "+977-1-0000000",
+    "taxPercent": 0,
+    "centerLat": 27.7172,
+    "centerLng": 85.324,
+    "serviceRadiusKm": 38
   }
 ]

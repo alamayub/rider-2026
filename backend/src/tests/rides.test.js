@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { countRides } from '../db/store.js';
-import { createRide, estimateFare, updateRideStatus } from '../services/rides.service.js';
+import { createRide, estimateFare, resolveCityForLocation, updateRideStatus } from '../services/rides.service.js';
 import { registerDbHooks } from './test-db-hooks.js';
 
 registerDbHooks();
@@ -9,6 +9,24 @@ registerDbHooks();
 test('estimate fare uses city config', async () => {
   const estimate = await estimateFare({ cityId: 'blr', distanceKm: 10, vehicleTypeId: 'vt-cab' });
   assert.equal(estimate.amount, 220);
+});
+
+test('resolveCityForLocation returns nearest in-service city', async () => {
+  const b = await resolveCityForLocation(12.97, 77.59);
+  assert.ok(b);
+  const id = String(b.id ?? '');
+  const code = String(b.code ?? '');
+  const name = String(b.name ?? '').toLowerCase();
+  assert.ok(
+    id === 'blr' || code === 'blr' || name.includes('bengaluru'),
+    `expected Bengaluru service city, got id=${id} code=${code} name=${b.name}`
+  );
+  assert.ok(typeof b.matchedDistanceKm === 'number');
+});
+
+test('resolveCityForLocation returns null far from any service area', async () => {
+  const out = await resolveCityForLocation(48.8566, 2.3522);
+  assert.equal(out, null);
 });
 
 test('create ride stores new ride', async () => {

@@ -1,3 +1,4 @@
+import cityConfigs from '../config/cities.json' with { type: 'json' };
 import {
   createRideRecord,
   createCouponRedemptionRecord,
@@ -15,6 +16,41 @@ import {
 } from '../db/store.js';
 import { findNearestAvailableDriver } from './dispatch.service.js';
 import { ensureDriverPayoutsAfterRideCompleted } from './payments.service.js';
+
+function toRad(deg) {
+  return (deg * Math.PI) / 180;
+}
+
+/** Great-circle distance in km (WGS84 approximation). */
+export function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function mergeCityGeo(city) {
+  const cfg = cityConfigs.find(
+    (x) =>
+      String(x.id) === String(city.id) ||
+      String(x.id) === String(city.code) ||
+      String(x.code) === String(city.code) ||
+      String(x.code) === String(city.id)
+  );
+  if (!cfg || cfg.centerLat == null || cfg.centerLng == null) {
+    return city;
+  }
+  return {
+    ...city,
+    centerLat: cfg.centerLat,
+    centerLng: cfg.centerLng,
+    serviceRadiusKm: cfg.serviceRadiusKm ?? 40
+  };
+}
 
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -188,5 +224,32 @@ export async function listAvailableVehicleTypes() {
 }
 
 export async function listBookingCities() {
-  return listCities();
+  const cities = await listCities();
+  return cities.map((c) => mergeCityGeo(c));
+}
+
+/**
+ * Picks the nearest configured service city whose radius contains (lat, lng).
+ * Returns null if no coverage (caller should respond with OUT_OF_SERVICE_AREA).
+ */
+export async function resolveCityForLocation(lat, lng) {
+  const latN = Number(lat);
+  const lngN = Number(lng);
+  if (!Number.isFinite(latN) || !Number.isFinite(lngN)) {
+    throw new Error('Invalid coordinates');
+  }
+  const cities = await listBookingCities();
+  let best = null;
+  for (const city of cities) {
+    if (city.centerLat == null || city.centerLng == null || city.serviceRadiusKm == null) {
+      continue;
+    }
+    const d = haversineKm(latN, lngN, Number(city.centerLat), Number(city.centerLng));
+    const r = Number(city.serviceRadiusKm);
+    if (d <= r && (!best || d < best.distanceKm)) {
+      best = { city, distanceKm: d };
+    }
+  }
+  if (!best) return null;
+  return { ...best.city, matchedDistanceKm: best.distanceKm };
 }

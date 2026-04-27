@@ -99,6 +99,30 @@ class RiderApi {
   /// Service areas (fare + tax config) for ride/parcel booking.
   Future<List<dynamic>> listCities() async => _list('/rides/cities');
 
+  /// Nearest in-service city for map booking, or `null` if [lat]/[lng] are outside all areas (HTTP 404).
+  Future<Map<String, dynamic>?> tryResolveCity({required double lat, required double lng}) async {
+    try {
+      final response = await _dio.get(
+        '/rides/cities/resolve',
+        queryParameters: <String, dynamic>{'lat': lat, 'lng': lng},
+        options: _authOptions,
+      );
+      final data = response.data;
+      if (data is Map<String, dynamic>) {
+        return Map<String, dynamic>.from(data);
+      }
+      if (data is Map) {
+        return Map<String, dynamic>.from(data);
+      }
+      return null;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
   Future<List<dynamic>> listVehicleTypes() async =>
       _list('/rides/vehicle-types');
   Future<Map<String, dynamic>> estimateRideFare(

@@ -5,6 +5,7 @@ import {
   listAvailableVehicleTypes,
   listBookingCities,
   listRidesByUserForViewer,
+  resolveCityForLocation,
   toRideResponseForUser,
   updateRideStatus
 } from '../services/rides.service.js';
@@ -58,4 +59,19 @@ export async function listVehicleTypesController(_req, res) {
 
 export async function listCitiesController(_req, res) {
   return res.json(await listBookingCities());
+}
+
+export async function resolveCityController(req, res) {
+  try {
+    const resolved = await resolveCityForLocation(req.query.lat, req.query.lng);
+    if (!resolved) {
+      return res.status(404).json({
+        error: 'We do not operate in this area yet.',
+        code: 'OUT_OF_SERVICE_AREA'
+      });
+    }
+    return res.json(resolved);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
 }

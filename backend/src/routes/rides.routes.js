@@ -7,6 +7,7 @@ import {
   listCitiesController,
   listVehicleTypesController,
   listMyRidesController,
+  resolveCityController,
   updateRideStatusController
 } from '../controllers/rides.controller.js';
 
@@ -16,6 +17,7 @@ ridesRouter.use(requireAuth);
 
 ridesRouter.post('/estimate', estimateFareController);
 ridesRouter.get('/cities', listCitiesController);
+ridesRouter.get('/cities/resolve', resolveCityController);
 ridesRouter.get('/vehicle-types', listVehicleTypesController);
 ridesRouter.post('/', createRideController);
 ridesRouter.post('/:rideId/status', updateRideStatusController);

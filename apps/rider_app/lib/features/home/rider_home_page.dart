@@ -9,6 +9,7 @@ import '../../core/booking_payloads.dart';
 import '../../core/local_notifications.dart';
 import '../../core/providers.dart';
 import '../../core/rider_api.dart';
+import '../booking/booking_map_sheet.dart';
 
 class RiderHomePage extends HookConsumerWidget {
   const RiderHomePage({super.key});
@@ -305,11 +306,11 @@ class _RidesTab extends HookWidget {
   @override
   Widget build(BuildContext context) {
     // Geo JSON: backend dispatch uses lat/lng (see rides/parcels services).
-    final plLat = useTextEditingController(text: '12.97');
-    final plLng = useTextEditingController(text: '77.59');
-    final drLat = useTextEditingController(text: '12.95');
-    final drLng = useTextEditingController(text: '77.58');
-    final distance = useTextEditingController(text: '10');
+    final plLat = useTextEditingController(text: '12.97160');
+    final plLng = useTextEditingController(text: '77.59460');
+    final drLat = useTextEditingController(text: '12.95000');
+    final drLng = useTextEditingController(text: '77.58000');
+    final distance = useTextEditingController(text: '5');
     final rideIdController = useTextEditingController();
     final rideStatusOtp = useTextEditingController();
     final statusLine = useTextEditingController(text: 'cancelled');
@@ -516,46 +517,35 @@ class _RidesTab extends HookWidget {
             },
           ),
         const SizedBox(height: 8),
-        const Text('Pickup (lat, lng)',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-        Row(
-          children: <Widget>[
-            Expanded(
-                child: TextField(
-                    controller: plLat,
-                    keyboardType: TextInputType.number,
-                    decoration:
-                        const InputDecoration(labelText: 'Pickup lat'))),
-            const SizedBox(width: 8),
-            Expanded(
-                child: TextField(
-                    controller: plLng,
-                    keyboardType: TextInputType.number,
-                    decoration:
-                        const InputDecoration(labelText: 'Pickup lng'))),
-          ],
+        FilledButton.tonalIcon(
+          onPressed: () async {
+            final BookingMapResult? r = await showBookingMapSheet(
+              context: context,
+              api: api,
+              kind: BookingMapKind.ride,
+            );
+            if (r == null) return;
+            plLat.text = r.pickup.latitude.toStringAsFixed(5);
+            plLng.text = r.pickup.longitude.toStringAsFixed(5);
+            drLat.text = r.drop.latitude.toStringAsFixed(5);
+            drLng.text = r.drop.longitude.toStringAsFixed(5);
+            distance.text = r.distanceKm.toStringAsFixed(2);
+            selectedCityId.value = r.cityId;
+            error.value = null;
+          },
+          icon: const Icon(Icons.map_outlined),
+          label: const Text('Set pickup & drop on map'),
         ),
-        const Text('Drop (lat, lng)',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-        Row(
-          children: <Widget>[
-            Expanded(
-                child: TextField(
-                    controller: drLat,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Drop lat'))),
-            const SizedBox(width: 8),
-            Expanded(
-                child: TextField(
-                    controller: drLng,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Drop lng'))),
-          ],
+        const SizedBox(height: 6),
+        Text(
+          'Straight-line distance (km) — edit if you need route distance instead.',
+          style: Theme.of(context).textTheme.bodySmall,
         ),
         TextField(
             controller: distance,
+            keyboardType: TextInputType.number,
             decoration: const InputDecoration(
-                labelText: 'Route distance (km) — used for fare + dispatch')),
+                labelText: 'Distance (km) for fare + dispatch')),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
@@ -717,11 +707,11 @@ class _ParcelsTab extends HookWidget {
 
   @override
   Widget build(BuildContext context) {
-    final plLat = useTextEditingController(text: '12.97');
-    final plLng = useTextEditingController(text: '77.59');
-    final drLat = useTextEditingController(text: '12.94');
-    final drLng = useTextEditingController(text: '77.60');
-    final distance = useTextEditingController(text: '8');
+    final plLat = useTextEditingController(text: '12.97160');
+    final plLng = useTextEditingController(text: '77.59460');
+    final drLat = useTextEditingController(text: '12.94000');
+    final drLng = useTextEditingController(text: '77.60000');
+    final distance = useTextEditingController(text: '5');
     final weight = useTextEditingController(text: '2');
     final itemDescription = useTextEditingController(text: 'Sample parcel');
     final senderName = useTextEditingController(text: 'Rider Sender');
@@ -897,39 +887,30 @@ class _ParcelsTab extends HookWidget {
               }
             },
           ),
-        const Text('Pickup (lat, lng)',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-        Row(
-          children: <Widget>[
-            Expanded(
-                child: TextField(
-                    controller: plLat,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Lat'))),
-            const SizedBox(width: 8),
-            Expanded(
-                child: TextField(
-                    controller: plLng,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Lng'))),
-          ],
+        const SizedBox(height: 8),
+        FilledButton.tonalIcon(
+          onPressed: () async {
+            final BookingMapResult? r = await showBookingMapSheet(
+              context: context,
+              api: api,
+              kind: BookingMapKind.parcel,
+            );
+            if (r == null) return;
+            plLat.text = r.pickup.latitude.toStringAsFixed(5);
+            plLng.text = r.pickup.longitude.toStringAsFixed(5);
+            drLat.text = r.drop.latitude.toStringAsFixed(5);
+            drLng.text = r.drop.longitude.toStringAsFixed(5);
+            distance.text = r.distanceKm.toStringAsFixed(2);
+            selectedCityId.value = r.cityId;
+            error.value = null;
+          },
+          icon: const Icon(Icons.map_outlined),
+          label: const Text('Set pickup & drop on map'),
         ),
-        const Text('Drop (lat, lng)',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-        Row(
-          children: <Widget>[
-            Expanded(
-                child: TextField(
-                    controller: drLat,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Lat'))),
-            const SizedBox(width: 8),
-            Expanded(
-                child: TextField(
-                    controller: drLng,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Lng'))),
-          ],
+        const SizedBox(height: 6),
+        Text(
+          'Distance (km) is straight-line from the map — adjust if you use route distance.',
+          style: Theme.of(context).textTheme.bodySmall,
         ),
         Row(
           children: <Widget>[
