@@ -35,7 +35,26 @@ export async function signInController(req, res) {
     const result = await signIn({ phone, email, role, password, otp, sourceIp });
     return res.json(result);
   } catch (error) {
-    return res.status(403).json({ error: 'Authentication failed' });
+    const msg = error?.message || 'Authentication failed';
+    if (msg.includes('Too many attempts')) {
+      return res.status(429).json({ error: msg });
+    }
+    if (msg.includes('Too many failed sign-in') || msg.includes('Too many failed OTP')) {
+      return res.status(429).json({ error: msg });
+    }
+    if (msg.includes('Account is')) {
+      return res.status(403).json({ error: msg });
+    }
+    if (msg.includes('Password must') || msg.includes('password or otp is required')) {
+      return res.status(400).json({ error: msg });
+    }
+    if (msg.includes('Invalid password') || msg.includes('Invalid OTP') || msg.includes('OTP expired')) {
+      return res.status(401).json({ error: msg });
+    }
+    if (msg.includes('Account not found')) {
+      return res.status(401).json({ error: msg });
+    }
+    return res.status(401).json({ error: msg });
   }
 }
 

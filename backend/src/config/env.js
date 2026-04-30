@@ -47,6 +47,11 @@ export const env = {
     endpoint: process.env.FCM_ENDPOINT || 'https://fcm.googleapis.com/fcm/send'
   },
   dbClient: 'mysql',
+  /**
+   * OSRM-compatible service root (no trailing slash), before `/route/v1/driving/...`.
+   * Default is FOSSGIS `routed-car` (see https://routing.openstreetmap.de ); override with OSRM_BASE_URL.
+   */
+  osrmBaseUrl: (process.env.OSRM_BASE_URL || 'https://routing.openstreetmap.de/routed-car').replace(/\/$/, ''),
   mysql: {
     host: process.env.MYSQL_HOST || '127.0.0.1',
     port: Number(process.env.MYSQL_PORT || 3306),

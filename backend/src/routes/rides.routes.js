@@ -9,6 +9,7 @@ import {
   listVehicleTypesController,
   listMyRidesController,
   resolveCityController,
+  drivingRouteController,
   reversePlaceController,
   searchPlacesController,
   updateRideStatusController
@@ -24,6 +25,7 @@ ridesRouter.get('/cities', listCitiesController);
 ridesRouter.get('/cities/resolve', resolveCityController);
 ridesRouter.get('/places/search', searchPlacesController);
 ridesRouter.get('/places/reverse', reversePlaceController);
+ridesRouter.get('/route', drivingRouteController);
 ridesRouter.get('/vehicle-types', listVehicleTypesController);
 ridesRouter.post('/', createRideController);
 ridesRouter.post('/:rideId/status', updateRideStatusController);

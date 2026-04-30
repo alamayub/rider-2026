@@ -1,4 +1,5 @@
 import { reversePlace, searchPlaces } from '../services/places.service.js';
+import { fetchDrivingRoutePreview } from '../services/routing.service.js';
 import {
   createRide,
   estimateFare,
@@ -113,5 +114,38 @@ export async function reversePlaceController(req, res) {
     const msg = error?.message || 'Reverse geocode failed';
     const status = /Invalid coordinates/i.test(msg) ? 400 : 502;
     return res.status(status).json({ error: msg });
+  }
+}
+
+function queryFloat(name, v) {
+  if (v === undefined || v === null || v === '') {
+    throw new Error(`Invalid ${name}`);
+  }
+  const raw = Array.isArray(v) ? v[0] : v;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    throw new Error(`Invalid ${name}`);
+  }
+  return n;
+}
+
+/** Proxied OSRM driving route for map preview (auth required). */
+export async function drivingRouteController(req, res) {
+  try {
+    const body = await fetchDrivingRoutePreview({
+      pickupLat: queryFloat('pickupLat', req.query.pickupLat),
+      pickupLng: queryFloat('pickupLng', req.query.pickupLng),
+      dropLat: queryFloat('dropLat', req.query.dropLat),
+      dropLng: queryFloat('dropLng', req.query.dropLng)
+    });
+    return res.json(body);
+  } catch (error) {
+    const msg = error?.message || 'Routing failed';
+    const isClient =
+      /Invalid|out of range|must differ|too short/i.test(msg) ||
+      msg.includes('Latitude') ||
+      msg.includes('Longitude') ||
+      msg.includes('No driving route found');
+    return res.status(isClient ? 400 : 502).json({ error: msg });
   }
 }
