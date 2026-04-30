@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/booking_payloads.dart';
-import '../widgets/console_widgets.dart';
 
 /// Styled list of rides for the Rides tab.
 class RiderMyRidesSection extends StatelessWidget {
@@ -90,21 +89,6 @@ class RiderMyRidesSection extends StatelessWidget {
               child: _RiderRideCard(ride: m, onUseRideId: onUseRideId),
             );
           }),
-        if (rides.isNotEmpty) ...<Widget>[
-          const SizedBox(height: 4),
-          Theme(
-            data: theme.copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(bottom: 8),
-              title: Text(
-                'Raw API response',
-                style: theme.textTheme.labelLarge?.copyWith(color: cs.onSurfaceVariant),
-              ),
-              children: <Widget>[RiderJsonPanel(title: 'rides/me', data: rides)],
-            ),
-          ),
-        ],
       ],
     );
   }

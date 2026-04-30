@@ -1,8 +1,23 @@
-import { createParcel, estimateParcelFare, getParcelById, listParcelsByUser, updateParcelStatus } from '../services/parcels.service.js';
+import {
+  createParcel,
+  estimateParcelFare,
+  estimateParcelFareOptions,
+  getParcelById,
+  listParcelsByUser,
+  updateParcelStatus
+} from '../services/parcels.service.js';
 
 export async function estimateParcelFareController(req, res) {
   try {
     return res.json(await estimateParcelFare(req.body));
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+}
+
+export async function estimateParcelFareOptionsController(req, res) {
+  try {
+    return res.json(await estimateParcelFareOptions(req.body));
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }

@@ -9,14 +9,54 @@ enum DeviceTokenRegistrationResult {
 }
 
 class RiderApi {
-  RiderApi({required this.baseUrl}) : _dio = Dio(BaseOptions(baseUrl: baseUrl));
+  RiderApi({required this.baseUrl}) : _dio = Dio(BaseOptions(baseUrl: baseUrl)) {
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onError: (DioException err, ErrorInterceptorHandler handler) {
+          _maybeNotifyUnauthorized(
+            err.requestOptions,
+            err.response?.statusCode,
+          );
+          return handler.next(err);
+        },
+      ),
+    );
+  }
 
   final String baseUrl;
+
+  /// Set by [SessionNotifier] so 401/403 on authenticated routes clears the session.
+  void Function()? onUnauthorized;
+
   final Dio _dio;
   String? _accessToken;
+  bool _unauthorizedNotified = false;
+
+  static bool _isPublicAuthPath(String path) {
+    final String p = path.endsWith('/') && path.length > 1
+        ? path.substring(0, path.length - 1)
+        : path;
+    return p == '/auth/signin' ||
+        p == '/auth/register' ||
+        p == '/auth/request-otp';
+  }
+
+  void _maybeNotifyUnauthorized(RequestOptions ro, int? statusCode) {
+    if (statusCode != 401 && statusCode != 403) return;
+    if (_isPublicAuthPath(ro.path)) return;
+    final Object? auth = ro.headers['Authorization'];
+    final String authStr = auth is String ? auth : '';
+    if (authStr.isEmpty) return;
+    if (_unauthorizedNotified) return;
+    _unauthorizedNotified = true;
+    onUnauthorized?.call();
+  }
 
   set accessToken(String? value) {
     _accessToken = value;
+    if (value != null && value.isNotEmpty) {
+      _unauthorizedNotified = false;
+    }
   }
 
   Options get _authOptions => Options(
@@ -118,6 +158,7 @@ class RiderApi {
         return DeviceTokenRegistrationResult.success;
       }
       if (code == 401 || code == 403) {
+        _maybeNotifyUnauthorized(response.requestOptions, code);
         return DeviceTokenRegistrationResult.unauthorized;
       }
       return DeviceTokenRegistrationResult.rejected;
@@ -182,11 +223,47 @@ class RiderApi {
     }
   }
 
+  /// Forward geocode via backend (Nominatim). Returns `{ label, lat, lng }` rows.
+  Future<List<Map<String, dynamic>>> searchPlaces(String query,
+      {int limit = 8}) async {
+    final String q = query.trim();
+    if (q.length < 3) {
+      return <Map<String, dynamic>>[];
+    }
+    final Map<String, dynamic> body = await _getMap(
+      '/rides/places/search',
+      query: <String, dynamic>{
+        'q': q,
+        'limit': limit,
+      },
+    );
+    final List<dynamic>? results = body['results'] as List<dynamic>?;
+    if (results == null) {
+      return <Map<String, dynamic>>[];
+    }
+    return results
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  /// Reverse geocode via backend (Nominatim). Returns display name or empty string.
+  Future<String> reversePlaceLabel({required double lat, required double lng}) async {
+    final Map<String, dynamic> body = await _getMap(
+      '/rides/places/reverse',
+      query: <String, dynamic>{'lat': lat, 'lng': lng},
+    );
+    return (body['label'] as String?)?.trim() ?? '';
+  }
+
   Future<List<dynamic>> listVehicleTypes() async =>
       _list('/rides/vehicle-types');
   Future<Map<String, dynamic>> estimateRideFare(
           Map<String, dynamic> body) async =>
       _map('/rides/estimate', body);
+  Future<Map<String, dynamic>> estimateRideFareOptions(
+          Map<String, dynamic> body) async =>
+      _map('/rides/estimate/options', body);
   Future<Map<String, dynamic>> createRide(Map<String, dynamic> body) async =>
       _map('/rides', body);
   Future<List<dynamic>> listMyRides() async => _list('/rides/me');
@@ -200,6 +277,10 @@ class RiderApi {
         if (cancellationReason != null && cancellationReason.trim().isNotEmpty)
           'cancellationReason': cancellationReason.trim(),
       });
+
+  /// Public catalog: active coupons in their valid window with usage remaining.
+  Future<List<dynamic>> listAvailableCoupons() async =>
+      _list('/coupons/available');
 
   Future<Map<String, dynamic>> validateCoupon({
     required String code,
@@ -234,6 +315,9 @@ class RiderApi {
   Future<Map<String, dynamic>> estimateParcelFare(
           Map<String, dynamic> body) async =>
       _map('/parcels/estimate', body);
+  Future<Map<String, dynamic>> estimateParcelFareOptions(
+          Map<String, dynamic> body) async =>
+      _map('/parcels/estimate/options', body);
   Future<Map<String, dynamic>> createParcel(Map<String, dynamic> body) async =>
       _map('/parcels', body);
   Future<List<dynamic>> listMyParcels() async => _list('/parcels/me');
@@ -267,8 +351,24 @@ class RiderApi {
 
   /// Opens or resumes the rider ↔ admin support thread (primary active admin).
   Future<Map<String, dynamic>> ensureSupportConversation() async {
-    final response = await _dio.post('/messages/support/conversation');
-    return Map<String, dynamic>.from(response.data as Map);
+    try {
+      final response = await _dio.post(
+        '/messages/support/conversation',
+        options: _authOptions,
+      );
+      final Object? data = response.data;
+      if (data is Map) {
+        return Map<String, dynamic>.from(data);
+      }
+      throw DioException(
+        requestOptions: response.requestOptions,
+        message: 'Unexpected response from support/conversation',
+        response: response,
+        type: DioExceptionType.badResponse,
+      );
+    } on DioException catch (e) {
+      throw Exception(_friendlyDioError(e));
+    }
   }
 
   Future<List<dynamic>> listMessages(String conversationId) =>
@@ -371,13 +471,16 @@ class RiderApi {
   }
 
   String _friendlyDioError(DioException e) {
-    final int? code = e.response?.statusCode;
-    if (code == 401 || code == 403) {
-      return 'Session expired or unauthorized. Please sign in again.';
-    }
     final dynamic data = e.response?.data;
     if (data is Map && data['error'] != null) {
       return data['error'].toString();
+    }
+    final int? code = e.response?.statusCode;
+    if (code == 401) {
+      return 'Session expired or unauthorized. Please sign in again.';
+    }
+    if (code == 403) {
+      return 'You are not allowed to do this. If you are signed in with the right account, try again or contact support.';
     }
     if (e.message != null && e.message!.trim().isNotEmpty) {
       return e.message!.trim();

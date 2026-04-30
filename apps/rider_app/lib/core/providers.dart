@@ -86,6 +86,7 @@ class RiderSession {
 
 class SessionNotifier extends StateNotifier<RiderSession?> {
   SessionNotifier(this._api, this._prefs) : super(null) {
+    _api.onUnauthorized = signOut;
     _restoreSession();
   }
 

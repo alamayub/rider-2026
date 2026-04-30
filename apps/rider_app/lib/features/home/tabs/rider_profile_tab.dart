@@ -4,7 +4,6 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../core/providers.dart';
 import '../../../core/rider_api.dart';
-import '../widgets/console_widgets.dart';
 
 class RiderProfileTab extends HookConsumerWidget {
   const RiderProfileTab({super.key, required this.api});
@@ -22,8 +21,6 @@ class RiderProfileTab extends HookConsumerWidget {
     final TextEditingController newPasswordController = useTextEditingController();
     final TextEditingController confirmPasswordController =
         useTextEditingController();
-    final profileResult = useState<Object?>(null);
-    final passwordResult = useState<Object?>(null);
     final error = useState<String?>(null);
     final loadingProfile = useState(false);
     final updatingProfile = useState(false);
@@ -33,8 +30,7 @@ class RiderProfileTab extends HookConsumerWidget {
       loadingProfile.value = true;
       error.value = null;
       try {
-        final result = await api.getMyProfile();
-        profileResult.value = result;
+        final Map<String, dynamic> result = await api.getMyProfile();
         fullNameController.text = (result['fullName'] ?? '').toString();
         emailController.text = (result['email'] ?? '').toString();
       } catch (e) {
@@ -54,12 +50,10 @@ class RiderProfileTab extends HookConsumerWidget {
       updatingProfile.value = true;
       error.value = null;
       try {
-        final result =
-            await api.updateMyProfile(
+        await api.updateMyProfile(
               email: emailController.text.trim(),
               fullName: fullNameController.text.trim(),
             );
-        profileResult.value = result;
       } catch (e) {
         error.value = e.toString();
       } finally {
@@ -83,7 +77,7 @@ class RiderProfileTab extends HookConsumerWidget {
       changingPassword.value = true;
       error.value = null;
       try {
-        passwordResult.value = await api.changePassword(
+        await api.changePassword(
           currentPassword: currentPassword,
           newPassword: newPassword,
         );
@@ -183,14 +177,6 @@ class RiderProfileTab extends HookConsumerWidget {
             error.value!,
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
-        ],
-        if (profileResult.value != null) ...<Widget>[
-          const SizedBox(height: 12),
-          RiderJsonPanel(title: 'Profile', data: profileResult.value),
-        ],
-        if (passwordResult.value != null) ...<Widget>[
-          const SizedBox(height: 12),
-          RiderJsonPanel(title: 'Password update', data: passwordResult.value),
         ],
       ],
     );

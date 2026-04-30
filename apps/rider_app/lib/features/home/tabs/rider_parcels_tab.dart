@@ -32,9 +32,8 @@ class RiderParcelsTab extends HookWidget {
     final status = useTextEditingController(text: 'picked_up');
     final selectedCityId = useState<String?>(null);
     final selectedVehicleTypeId = useState<String?>(null);
-    final estimateResult = useState<Object?>(null);
-    final createResult = useState<Object?>(null);
-    final parcelDetail = useState<Object?>(null);
+    final fareEstimateOptions = useState<List<dynamic>?>(null);
+    final estimatedParcelAmount = useState<double>(0);
     final error = useState<String?>(null);
     final refresh = useState(0);
 
@@ -74,20 +73,45 @@ class RiderParcelsTab extends HookWidget {
     final vtid = selectedVehicleTypeId.value?.trim() ?? '';
 
     Future<void> estimateParcel() async {
-      if (cid.isEmpty || vtid.isEmpty) {
-        error.value = 'Select city and vehicle type';
+      if (cid.isEmpty) {
+        error.value = 'Select a city';
         return;
       }
       error.value = null;
       try {
-        estimateResult.value = await api.estimateParcelFare(<String, dynamic>{
-          'cityId': cid,
-          'distanceKm': double.tryParse(distance.text.trim()) ?? 0,
-          'weightKg': double.tryParse(weight.text.trim()) ?? 0,
-          'vehicleTypeId': vtid,
-        });
+        final Map<String, dynamic> result = await api.estimateParcelFareOptions(
+          <String, dynamic>{
+            'cityId': cid,
+            'distanceKm': double.tryParse(distance.text.trim()) ?? 0,
+            'weightKg': double.tryParse(weight.text.trim()) ?? 0,
+          },
+        );
+        final List<dynamic> opts =
+            (result['options'] as List<dynamic>?) ?? <dynamic>[];
+        fareEstimateOptions.value = opts;
+        if (opts.isEmpty) {
+          estimatedParcelAmount.value = 0;
+          return;
+        }
+        Map<String, dynamic>? picked;
+        if (vtid.isNotEmpty) {
+          for (final dynamic o in opts) {
+            final Map<String, dynamic> m =
+                Map<String, dynamic>.from(o as Map);
+            if (m['vehicleTypeId']?.toString() == vtid) {
+              picked = m;
+              break;
+            }
+          }
+        }
+        picked ??= Map<String, dynamic>.from(opts.first as Map);
+        selectedVehicleTypeId.value =
+            picked['vehicleTypeId']?.toString();
+        estimatedParcelAmount.value =
+            (picked['amount'] as num?)?.toDouble() ?? 0;
       } catch (e) {
         error.value = e.toString();
+        fareEstimateOptions.value = null;
       }
     }
 
@@ -102,7 +126,7 @@ class RiderParcelsTab extends HookWidget {
           double.tryParse(drLng.text.trim()) ?? 0);
       error.value = null;
       try {
-        createResult.value = await api.createParcel(<String, dynamic>{
+        final Map<String, dynamic> created = await api.createParcel(<String, dynamic>{
           'cityId': cid,
           'pickup': pickup,
           'drop': drop,
@@ -119,11 +143,8 @@ class RiderParcelsTab extends HookWidget {
           'receiverEmail': receiverEmail.text.trim(),
           'receiverAddress': receiverAddress.text.trim(),
         });
-        if (createResult.value is Map) {
-          final m = createResult.value as Map<String, dynamic>;
-          if ((m['id'] ?? '') != '') {
-            parcelId.text = m['id'].toString();
-          }
+        if ((created['id'] ?? '') != '') {
+          parcelId.text = created['id'].toString();
         }
         refresh.value++;
       } catch (e) {
@@ -134,7 +155,7 @@ class RiderParcelsTab extends HookWidget {
     Future<void> updateStatus() async {
       error.value = null;
       try {
-        createResult.value = await api.updateParcelStatus(
+        await api.updateParcelStatus(
           parcelId.text.trim(),
           status.text.trim(),
           otp: otp.text.trim().isNotEmpty ? otp.text.trim() : null,
@@ -150,7 +171,7 @@ class RiderParcelsTab extends HookWidget {
       if (id.isEmpty) return;
       error.value = null;
       try {
-        parcelDetail.value = await api.getParcelById(id);
+        await api.getParcelById(id);
       } catch (e) {
         error.value = e.toString();
       }
@@ -190,6 +211,18 @@ class RiderParcelsTab extends HookWidget {
             onChanged: (v) {
               if (v != null) {
                 selectedVehicleTypeId.value = v;
+                final List<dynamic>? list = fareEstimateOptions.value;
+                if (list != null) {
+                  for (final dynamic o in list) {
+                    final Map<String, dynamic> m =
+                        Map<String, dynamic>.from(o as Map);
+                    if (m['vehicleTypeId']?.toString() == v) {
+                      estimatedParcelAmount.value =
+                          (m['amount'] as num?)?.toDouble() ?? 0;
+                      break;
+                    }
+                  }
+                }
               }
             },
           ),
@@ -262,11 +295,56 @@ class RiderParcelsTab extends HookWidget {
           children: <Widget>[
             ElevatedButton(
                 onPressed: estimateParcel,
-                child: const Text('Estimate parcel fare')),
+                child: const Text('Estimate parcel fares (all vehicles)')),
             OutlinedButton(
                 onPressed: createParcel, child: const Text('Create parcel')),
           ],
         ),
+        if (fareEstimateOptions.value != null &&
+            fareEstimateOptions.value!.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 12),
+          Text(
+            'Parcel fares by vehicle type',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            margin: EdgeInsets.zero,
+            child: Column(
+              children: fareEstimateOptions.value!.map((dynamic raw) {
+                final Map<String, dynamic> o =
+                    Map<String, dynamic>.from(raw as Map);
+                final String vid = o['vehicleTypeId']?.toString() ?? '';
+                final String name = o['name']?.toString() ?? vid;
+                final int amt = (o['amount'] as num?)?.round() ?? 0;
+                final bool sel = vtid == vid;
+                return ListTile(
+                  dense: true,
+                  selected: sel,
+                  title: Text(name),
+                  subtitle: Text('Multiplier × ${o['fareMultiplier']}'),
+                  trailing: Text(
+                    '$amt',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                  onTap: () {
+                    selectedVehicleTypeId.value = vid;
+                    estimatedParcelAmount.value =
+                        (o['amount'] as num?)?.toDouble() ?? 0;
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          Text(
+            'Weight used: ${weight.text.trim()} kg · Selected fare: ${estimatedParcelAmount.value}',
+          ),
+          const SizedBox(height: 8),
+        ],
         const Divider(height: 24),
         const Text('Status / detail',
             style: TextStyle(fontWeight: FontWeight.bold)),
@@ -293,16 +371,14 @@ class RiderParcelsTab extends HookWidget {
                 child: const Text('Get parcel detail')),
           ],
         ),
-        if (estimateResult.value != null)
-          RiderJsonPanel(title: 'Parcel estimate', data: estimateResult.value),
-        if (createResult.value != null)
-          RiderJsonPanel(title: 'Parcel result', data: createResult.value),
-        if (parcelDetail.value != null)
-          RiderJsonPanel(title: 'Parcel detail', data: parcelDetail.value),
         if (error.value != null)
           Text(error.value!,
               style: TextStyle(color: Theme.of(context).colorScheme.error)),
-        RiderJsonPanel(title: 'My parcels', data: parcels),
+        const SizedBox(height: 8),
+        Text(
+          'Your parcels: ${parcels.length}',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
       ],
     );
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -26,7 +28,7 @@ class BookingMapResult {
   final String cityName;
 }
 
-/// Uber-style pickup / drop selection: map tap, current location, auto city from backend.
+/// Uber-style pickup / drop selection: search fields, map tap, current location, auto city from backend.
 Future<BookingMapResult?> showBookingMapSheet({
   required BuildContext context,
   required RiderApi api,
@@ -58,9 +60,24 @@ class _BookingMapBody extends StatefulWidget {
 
 class _BookingMapBodyState extends State<_BookingMapBody> {
   final MapController _mapController = MapController();
+  final TextEditingController _pickupField = TextEditingController();
+  final TextEditingController _dropField = TextEditingController();
+  final FocusNode _pickupFocus = FocusNode();
+  final FocusNode _dropFocus = FocusNode();
+  final LayerLink _pickupLayerLink = LayerLink();
+  final LayerLink _dropLayerLink = LayerLink();
+
+  Timer? _pickupSearchDebounce;
+  Timer? _dropSearchDebounce;
+
   LatLng? _pickup;
   LatLng? _drop;
   bool _editingPickup = true;
+
+  List<Map<String, dynamic>> _pickupSuggestions = <Map<String, dynamic>>[];
+  List<Map<String, dynamic>> _dropSuggestions = <Map<String, dynamic>>[];
+  bool _searchingPickup = false;
+  bool _searchingDrop = false;
 
   Map<String, dynamic>? _serviceCity;
   String? _pickupServiceError;
@@ -73,18 +90,28 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrapMap());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initPickupFromGpsOrFallback());
+  }
+
+  Future<void> _initPickupFromGpsOrFallback() async {
+    await _trySetDefaultPickupFromGps();
+    if (mounted && _pickup == null) {
+      await _bootstrapMap();
+    }
   }
 
   Future<void> _bootstrapMap() async {
     try {
-      final cities = await widget.api.listCities();
-      final withCenter = cities.cast<Map>().map((dynamic e) => Map<String, dynamic>.from(e)).where((Map<String, dynamic> m) {
+      final List<dynamic> cities = await widget.api.listCities();
+      final List<Map<String, dynamic>> withCenter = cities
+          .cast<Map>()
+          .map((dynamic e) => Map<String, dynamic>.from(e))
+          .where((Map<String, dynamic> m) {
         return m['centerLat'] != null && m['centerLng'] != null;
       }).toList();
       if (withCenter.isNotEmpty && mounted) {
-        final first = withCenter.first;
-        final c = LatLng(
+        final Map<String, dynamic> first = withCenter.first;
+        final LatLng c = LatLng(
           (first['centerLat'] as num).toDouble(),
           (first['centerLng'] as num).toDouble(),
         );
@@ -97,6 +124,134 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
         _mapController.move(_fallbackCenter, 12);
       }
     }
+  }
+
+  Future<void> _trySetDefaultPickupFromGps() async {
+    try {
+      final PermissionStatus whenInUse = await Permission.locationWhenInUse.request();
+      if (!whenInUse.isGranted) {
+        return;
+      }
+      final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        return;
+      }
+      final Position pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+      );
+      if (!mounted) return;
+      final LatLng here = LatLng(pos.latitude, pos.longitude);
+      setState(() {
+        _pickup = here;
+        _pickupField.text = 'Loading address…';
+        _editingPickup = false;
+      });
+      _mapController.move(here, 14);
+      await _resolvePickupCity();
+      unawaited(_applyReverseLabel(here, forPickup: true));
+    } catch (_) {
+      // Fall back to listCities center in _bootstrapMap.
+    }
+  }
+
+  void _schedulePickupSearch(String query) {
+    _pickupSearchDebounce?.cancel();
+    _pickupSearchDebounce = Timer(const Duration(milliseconds: 450), () {
+      unawaited(_runPickupSearch(query));
+    });
+  }
+
+  void _scheduleDropSearch(String query) {
+    _dropSearchDebounce?.cancel();
+    _dropSearchDebounce = Timer(const Duration(milliseconds: 450), () {
+      unawaited(_runDropSearch(query));
+    });
+  }
+
+  Future<void> _runPickupSearch(String q) async {
+    final String t = q.trim();
+    if (t.length < 3) {
+      if (mounted) {
+        setState(() {
+          _pickupSuggestions = <Map<String, dynamic>>[];
+          _searchingPickup = false;
+        });
+      }
+      return;
+    }
+    setState(() => _searchingPickup = true);
+    try {
+      final List<Map<String, dynamic>> hits = await widget.api.searchPlaces(t);
+      if (!mounted) return;
+      setState(() {
+        _pickupSuggestions = hits;
+        _searchingPickup = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _pickupSuggestions = <Map<String, dynamic>>[];
+        _searchingPickup = false;
+      });
+    }
+  }
+
+  Future<void> _runDropSearch(String q) async {
+    final String t = q.trim();
+    if (t.length < 3) {
+      if (mounted) {
+        setState(() {
+          _dropSuggestions = <Map<String, dynamic>>[];
+          _searchingDrop = false;
+        });
+      }
+      return;
+    }
+    setState(() => _searchingDrop = true);
+    try {
+      final List<Map<String, dynamic>> hits = await widget.api.searchPlaces(t);
+      if (!mounted) return;
+      setState(() {
+        _dropSuggestions = hits;
+        _searchingDrop = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _dropSuggestions = <Map<String, dynamic>>[];
+        _searchingDrop = false;
+      });
+    }
+  }
+
+  void _applyPickupPlace(Map<String, dynamic> m) {
+    final double? lat = (m['lat'] as num?)?.toDouble();
+    final double? lng = (m['lng'] as num?)?.toDouble();
+    final String label = (m['label'] as String?)?.trim() ?? '';
+    if (lat == null || lng == null) return;
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _pickup = LatLng(lat, lng);
+      _pickupField.text = label.isNotEmpty ? label : '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+      _pickupSuggestions = <Map<String, dynamic>>[];
+      _editingPickup = false;
+    });
+    _mapController.move(LatLng(lat, lng), 15);
+    unawaited(_resolvePickupCity());
+  }
+
+  void _applyDropPlace(Map<String, dynamic> m) {
+    final double? lat = (m['lat'] as num?)?.toDouble();
+    final double? lng = (m['lng'] as num?)?.toDouble();
+    final String label = (m['label'] as String?)?.trim() ?? '';
+    if (lat == null || lng == null) return;
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _drop = LatLng(lat, lng);
+      _dropField.text = label.isNotEmpty ? label : '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+      _dropSuggestions = <Map<String, dynamic>>[];
+    });
+    _mapController.move(LatLng(lat, lng), 15);
   }
 
   Future<void> _useCurrentLocation() async {
@@ -125,18 +280,22 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
         locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
       );
       final LatLng here = LatLng(pos.latitude, pos.longitude);
+      final bool updatedPickup = _editingPickup || _pickup == null;
       if (!mounted) return;
       setState(() {
         if (_editingPickup || _pickup == null) {
           _pickup = here;
+          _pickupField.text = 'Loading address…';
           _editingPickup = false;
         } else {
           _drop = here;
+          _dropField.text = 'Loading address…';
         }
         _locating = false;
       });
       _mapController.move(here, 15);
       await _resolvePickupCity();
+      unawaited(_applyReverseLabel(here, forPickup: updatedPickup));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -155,13 +314,14 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
       _serviceCity = null;
     });
     try {
-      final Map<String, dynamic>? resolved = await widget.api.tryResolveCity(lat: p.latitude, lng: p.longitude);
+      final Map<String, dynamic>? resolved =
+          await widget.api.tryResolveCity(lat: p.latitude, lng: p.longitude);
       if (!mounted) return;
       if (resolved == null) {
         setState(() {
           _serviceCity = null;
           _pickupServiceError =
-              'We are not here yet. Try moving the pickup pin into a shaded service area, or choose another city later.';
+              'We are not here yet. Try moving the pickup pin into the shaded service area or search for an address inside our coverage.';
           _resolving = false;
         });
         return;
@@ -186,19 +346,65 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
     }
   }
 
+  String _shortCoordLabel(LatLng p) =>
+      '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}';
+
+  bool _sameLatLng(LatLng? a, LatLng b) {
+    if (a == null) return false;
+    return (a.latitude - b.latitude).abs() < 1e-7 && (a.longitude - b.longitude).abs() < 1e-7;
+  }
+
+  Future<void> _applyReverseLabel(LatLng point, {required bool forPickup}) async {
+    try {
+      final String label =
+          await widget.api.reversePlaceLabel(lat: point.latitude, lng: point.longitude);
+      if (!mounted) return;
+      final String t = label.trim();
+      if (t.isEmpty) {
+        setState(() {
+          if (forPickup && _sameLatLng(_pickup, point)) {
+            _pickupField.text = _shortCoordLabel(point);
+          } else if (!forPickup && _sameLatLng(_drop, point)) {
+            _dropField.text = _shortCoordLabel(point);
+          }
+        });
+        return;
+      }
+      setState(() {
+        if (forPickup && _sameLatLng(_pickup, point)) {
+          _pickupField.text = t;
+        } else if (!forPickup && _sameLatLng(_drop, point)) {
+          _dropField.text = t;
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        if (forPickup && _sameLatLng(_pickup, point)) {
+          _pickupField.text = _shortCoordLabel(point);
+        } else if (!forPickup && _sameLatLng(_drop, point)) {
+          _dropField.text = _shortCoordLabel(point);
+        }
+      });
+    }
+  }
+
   void _onMapTap(TapPosition _, LatLng point) {
+    FocusScope.of(context).unfocus();
+    final bool pickup = _editingPickup;
     setState(() {
-      if (_editingPickup) {
+      if (pickup) {
         _pickup = point;
+        _pickupField.text = 'Loading address…';
       } else {
         _drop = point;
+        _dropField.text = 'Loading address…';
       }
     });
-    if (_editingPickup) {
-      _resolvePickupCity();
-    } else {
-      setState(() {});
+    if (pickup) {
+      unawaited(_resolvePickupCity());
     }
+    unawaited(_applyReverseLabel(point, forPickup: pickup));
   }
 
   bool get _dropOutsideService {
@@ -248,8 +454,16 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
     ));
   }
 
+  bool get _canEditDrop => _pickup != null && _serviceCity != null;
+
   @override
   void dispose() {
+    _pickupSearchDebounce?.cancel();
+    _dropSearchDebounce?.cancel();
+    _pickupField.dispose();
+    _dropField.dispose();
+    _pickupFocus.dispose();
+    _dropFocus.dispose();
     _mapController.dispose();
     super.dispose();
   }
@@ -319,7 +533,7 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
                 const ButtonSegment<bool>(value: true, label: Text('Pickup'), icon: Icon(Icons.trip_origin, size: 18)),
                 ButtonSegment<bool>(
                   value: false,
-                  enabled: _pickup != null && _serviceCity != null,
+                  enabled: _canEditDrop,
                   label: const Text('Drop-off'),
                   icon: const Icon(Icons.location_on, size: 18),
                 ),
@@ -328,6 +542,117 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
               onSelectionChanged: (Set<bool> next) {
                 if (next.isEmpty) return;
                 setState(() => _editingPickup = next.first);
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                final double fieldWidth = constraints.maxWidth;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: <Widget>[
+                        CompositedTransformTarget(
+                          link: _pickupLayerLink,
+                          child: TextField(
+                            controller: _pickupField,
+                            focusNode: _pickupFocus,
+                            decoration: InputDecoration(
+                              labelText: 'Pickup',
+                              hintText: 'Search address (3+ characters)',
+                              isDense: true,
+                              suffixIcon: _searchingPickup
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(12),
+                                      child: SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                            textInputAction: TextInputAction.next,
+                            onTap: () => setState(() => _editingPickup = true),
+                            onChanged: (String v) => _schedulePickupSearch(v),
+                          ),
+                        ),
+                        if (_pickupSuggestions.isNotEmpty)
+                          CompositedTransformFollower(
+                            link: _pickupLayerLink,
+                            showWhenUnlinked: false,
+                            targetAnchor: Alignment.bottomLeft,
+                            followerAnchor: Alignment.topLeft,
+                            offset: const Offset(0, 4),
+                            child: SizedBox(
+                              width: fieldWidth,
+                              child: _SuggestionList(
+                                hits: _pickupSuggestions,
+                                onPick: _applyPickupPlace,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: <Widget>[
+                        CompositedTransformTarget(
+                          link: _dropLayerLink,
+                          child: TextField(
+                            controller: _dropField,
+                            focusNode: _dropFocus,
+                            enabled: _canEditDrop,
+                            decoration: InputDecoration(
+                              labelText: 'Drop-off',
+                              hintText: _canEditDrop
+                                  ? 'Search address (3+ characters)'
+                                  : 'Set a valid pickup first',
+                              isDense: true,
+                              suffixIcon: _searchingDrop
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(12),
+                                      child: SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                            textInputAction: TextInputAction.done,
+                            onTap: () => setState(() => _editingPickup = false),
+                            onChanged: (String v) {
+                              if (_canEditDrop) {
+                                _scheduleDropSearch(v);
+                              }
+                            },
+                          ),
+                        ),
+                        if (_dropSuggestions.isNotEmpty && _canEditDrop)
+                          CompositedTransformFollower(
+                            link: _dropLayerLink,
+                            showWhenUnlinked: false,
+                            targetAnchor: Alignment.bottomLeft,
+                            followerAnchor: Alignment.topLeft,
+                            offset: const Offset(0, 4),
+                            child: SizedBox(
+                              width: fieldWidth,
+                              child: _SuggestionList(
+                                hits: _dropSuggestions,
+                                onPick: _applyDropPlace,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                );
               },
             ),
           ),
@@ -419,7 +744,7 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
                       subtitle: Text(
                         _routeKm != null
                             ? 'Route ~${_routeKm!.toStringAsFixed(1)} km straight line'
-                            : 'Tap map to set pickup and drop-off',
+                            : 'Set pickup and drop-off above or on the map',
                       ),
                     ),
                   if (_resolving)
@@ -448,6 +773,41 @@ class _BookingMapBodyState extends State<_BookingMapBody> {
         _routeKm! > 0 &&
         !_dropOutsideService &&
         !_resolving;
+  }
+}
+
+class _SuggestionList extends StatelessWidget {
+  const _SuggestionList({
+    required this.hits,
+    required this.onPick,
+  });
+
+  final List<Map<String, dynamic>> hits;
+  final void Function(Map<String, dynamic>) onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 2,
+      borderRadius: BorderRadius.circular(8),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 180),
+        child: ListView.builder(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
+          itemCount: hits.length,
+          itemBuilder: (BuildContext context, int i) {
+            final Map<String, dynamic> m = hits[i];
+            final String label = (m['label'] as String?) ?? '';
+            return ListTile(
+              dense: true,
+              title: Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
+              onTap: () => onPick(m),
+            );
+          },
+        ),
+      ),
+    );
   }
 }
 

@@ -67,8 +67,6 @@ class RiderOverviewTab extends HookWidget {
             RiderStatCard(title: 'My Parcels', value: '${parcels.length}'),
           ],
         ),
-        const SizedBox(height: 10),
-        RiderJsonPanel(title: 'Active Offers', data: offers),
       ],
     );
   }

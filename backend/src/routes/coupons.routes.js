@@ -1,10 +1,17 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import { applyCouponController, createCouponController, listCouponsController, validateCouponController } from '../controllers/coupons.controller.js';
+import {
+  applyCouponController,
+  createCouponController,
+  listAvailableCouponsController,
+  listCouponsController,
+  validateCouponController
+} from '../controllers/coupons.controller.js';
 
 export const couponsRouter = Router();
 
 couponsRouter.use(requireAuth);
+couponsRouter.get('/available', listAvailableCouponsController);
 couponsRouter.post('/validate', validateCouponController);
 couponsRouter.post('/apply', applyCouponController);
 

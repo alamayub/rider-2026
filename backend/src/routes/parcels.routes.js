@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth.js';
 import {
   createParcelController,
   estimateParcelFareController,
+  estimateParcelFareOptionsController,
   getParcelByIdController,
   listMyParcelsController,
   updateParcelStatusController
@@ -12,6 +13,7 @@ export const parcelsRouter = Router();
 parcelsRouter.use(requireAuth);
 
 parcelsRouter.post('/estimate', estimateParcelFareController);
+parcelsRouter.post('/estimate/options', estimateParcelFareOptionsController);
 parcelsRouter.post('/', createParcelController);
 parcelsRouter.post('/:parcelId/status', updateParcelStatusController);
 parcelsRouter.get('/me', listMyParcelsController);

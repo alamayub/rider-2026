@@ -6,7 +6,6 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../core/providers.dart';
 import '../../../core/rider_api.dart';
-import '../widgets/console_widgets.dart';
 
 class RiderMessagesTab extends HookConsumerWidget {
   const RiderMessagesTab({super.key, required this.api});
@@ -58,15 +57,6 @@ class RiderMessagesTab extends HookConsumerWidget {
           .contains(q);
     }).toList();
 
-    final msgFuture = useMemoized(() {
-      final id = conversationId.value;
-      if (id == null || id.isEmpty) {
-        return Future<List<dynamic>>.value(<dynamic>[]);
-      }
-      return api.listMessages(id);
-    }, <Object?>[conversationId.value, refresh.value]);
-    final msgSnap = useFuture(msgFuture);
-
     final supportMsgFuture = useMemoized(() {
       final id = supportConvId.value;
       if (id == null || id.isEmpty) {
@@ -75,12 +65,6 @@ class RiderMessagesTab extends HookConsumerWidget {
       return api.listMessages(id);
     }, <Object?>[supportConvId.value, refresh.value]);
     final supportMsgSnap = useFuture(supportMsgFuture);
-    final myNotificationsFuture = useMemoized(
-        () => api.listMyNotifications(limit: 100), <Object?>[refresh.value]);
-    final myNotificationsSnap = useFuture(myNotificationsFuture);
-    final myNotificationStatsFuture = useMemoized(
-        () => api.getMyNotificationStats(), <Object?>[refresh.value]);
-    final myNotificationStatsSnap = useFuture(myNotificationStatsFuture);
 
     Future<void> startConversation() async {
       if (participant.text.trim().isEmpty) return;
@@ -378,14 +362,6 @@ class RiderMessagesTab extends HookConsumerWidget {
             IconButton(onPressed: sendMessage, icon: const Icon(Icons.send)),
           ],
         ),
-        RiderJsonPanel(
-            title: 'My Notification Stats (server)',
-            data: myNotificationStatsSnap.data ?? <String, dynamic>{}),
-        RiderJsonPanel(
-            title: 'My Notifications (server)',
-            data: myNotificationsSnap.data ?? <dynamic>[]),
-        RiderJsonPanel(title: 'Messages', data: msgSnap.data ?? <dynamic>[]),
-        RiderJsonPanel(title: 'Live Message Stream', data: live.value),
       ],
     );
   }

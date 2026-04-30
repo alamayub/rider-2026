@@ -1,6 +1,8 @@
+import { reversePlace, searchPlaces } from '../services/places.service.js';
 import {
   createRide,
   estimateFare,
+  estimateFareOptions,
   getRideByIdForUser,
   listAvailableVehicleTypes,
   listBookingCities,
@@ -13,6 +15,14 @@ import {
 export async function estimateFareController(req, res) {
   try {
     return res.json(await estimateFare(req.body));
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+}
+
+export async function estimateFareOptionsController(req, res) {
+  try {
+    return res.json(await estimateFareOptions(req.body));
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
@@ -83,5 +93,25 @@ export async function resolveCityController(req, res) {
     return res.json(resolved);
   } catch (error) {
     return res.status(400).json({ error: error.message });
+  }
+}
+
+export async function searchPlacesController(req, res) {
+  try {
+    const q = req.query.q;
+    const limit = req.query.limit;
+    return res.json(await searchPlaces({ query: q, limit }));
+  } catch (error) {
+    return res.status(502).json({ error: error.message || 'Place search failed' });
+  }
+}
+
+export async function reversePlaceController(req, res) {
+  try {
+    return res.json(await reversePlace({ lat: req.query.lat, lng: req.query.lng }));
+  } catch (error) {
+    const msg = error?.message || 'Reverse geocode failed';
+    const status = /Invalid coordinates/i.test(msg) ? 400 : 502;
+    return res.status(status).json({ error: msg });
   }
 }

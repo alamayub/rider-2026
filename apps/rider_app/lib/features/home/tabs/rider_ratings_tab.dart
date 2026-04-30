@@ -20,8 +20,6 @@ class RiderRatingsTab extends HookWidget {
     final reportReason = useTextEditingController(text: 'driver_behaviour');
     final reportDescription = useTextEditingController();
     final reportRideId = useTextEditingController();
-    final lookupResult = useState<Object?>(null);
-    final ratingResult = useState<Object?>(null);
     final error = useState<String?>(null);
     final refresh = useState(0);
 
@@ -38,7 +36,7 @@ class RiderRatingsTab extends HookWidget {
     Future<void> submitRating() async {
       error.value = null;
       try {
-        ratingResult.value = await api.createRating(
+        await api.createRating(
           rideId: rideId.text.trim(),
           toUserId: targetUser.text.trim(),
           score: int.tryParse(score.text.trim()) ?? 5,
@@ -53,8 +51,7 @@ class RiderRatingsTab extends HookWidget {
     Future<void> lookupRating() async {
       error.value = null;
       try {
-        lookupResult.value =
-            await api.getUserRatingSummary(lookupUser.text.trim());
+        await api.getUserRatingSummary(lookupUser.text.trim());
       } catch (e) {
         error.value = e.toString();
       }
@@ -63,7 +60,7 @@ class RiderRatingsTab extends HookWidget {
     Future<void> submitReport() async {
       error.value = null;
       try {
-        ratingResult.value = await api.createReport(
+        await api.createReport(
           reportedUserId: reportUser.text.trim(),
           reason: reportReason.text.trim(),
           description: reportDescription.text.trim(),
@@ -75,16 +72,26 @@ class RiderRatingsTab extends HookWidget {
       }
     }
 
-    final mySummary =
-        ratingsSnap.data?[0] as Map<String, dynamic>? ?? <String, dynamic>{};
+    if (ratingsSnap.connectionState != ConnectionState.done) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (ratingsSnap.hasError) {
+      return RiderErrorView(error: ratingsSnap.error);
+    }
+
     final myRatings = ratingsSnap.data?[1] as List<dynamic>? ?? <dynamic>[];
     final myReports = ratingsSnap.data?[2] as List<dynamic>? ?? <dynamic>[];
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
-        RiderJsonPanel(title: 'My Rating Summary', data: mySummary),
-        RiderJsonPanel(title: 'My Ratings', data: myRatings),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(
+            'You have ${myRatings.length} rating(s) and ${myReports.length} report(s).',
+            style: Theme.of(context).textTheme.bodyLarge,
+          ),
+        ),
         const Text('Rate Driver',
             style: TextStyle(fontWeight: FontWeight.bold)),
         TextField(
@@ -101,8 +108,6 @@ class RiderRatingsTab extends HookWidget {
             decoration: const InputDecoration(labelText: 'Comment')),
         ElevatedButton(
             onPressed: submitRating, child: const Text('Submit Rating')),
-        if (ratingResult.value != null)
-          RiderJsonPanel(title: 'Rating Submit Result', data: ratingResult.value),
         const SizedBox(height: 8),
         Row(
           children: <Widget>[
@@ -116,8 +121,6 @@ class RiderRatingsTab extends HookWidget {
                 onPressed: lookupRating, child: const Text('Lookup')),
           ],
         ),
-        if (lookupResult.value != null)
-          RiderJsonPanel(title: 'Driver Summary', data: lookupResult.value),
         const Divider(height: 28),
         const Text('Report Driver',
             style: TextStyle(fontWeight: FontWeight.bold)),
@@ -136,7 +139,6 @@ class RiderRatingsTab extends HookWidget {
             decoration: const InputDecoration(labelText: 'Description')),
         ElevatedButton(
             onPressed: submitReport, child: const Text('Submit Report')),
-        RiderJsonPanel(title: 'My Reports', data: myReports),
         if (error.value != null)
           Text(error.value!,
               style: TextStyle(color: Theme.of(context).colorScheme.error)),

@@ -86,6 +86,7 @@ class DriverSession {
 
 class SessionNotifier extends StateNotifier<DriverSession?> {
   SessionNotifier(this._api, this._prefs) : super(null) {
+    _api.onUnauthorized = signOut;
     _restoreSession();
   }
 

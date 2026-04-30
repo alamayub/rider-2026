@@ -110,14 +110,43 @@ export async function estimateFare({ cityId, distanceKm, vehicleTypeId }) {
   if (!vehicleType) throw new Error('Vehicle type not found');
   if (!vehicleType.isActive) throw new Error('Vehicle type inactive');
 
-  const baseAmount = city.baseFare + city.perKm * distanceKm;
-  const amount = Math.round(baseAmount * Number(vehicleType.fareMultiplier || 1));
+  const dk = Math.max(0, Number(distanceKm) || 0);
+  const baseFare = Number(city.baseFare ?? city.base_fare ?? 0);
+  const perKm = Number(city.perKm ?? city.per_km ?? 0);
+  const baseAmount = baseFare + perKm * dk;
+  const mult = Number(vehicleType.fareMultiplier ?? vehicleType.fare_multiplier ?? 1) || 1;
+  const amount = Math.round(baseAmount * mult);
 
   return {
     cityId: city.id,
-    distanceKm,
+    distanceKm: dk,
     vehicleTypeId: vehicleType.id,
     amount
+  };
+}
+
+/** Fare for every active vehicle type (same formula as [estimateFare]). */
+export async function estimateFareOptions({ cityId, distanceKm }) {
+  const city = await findCityById(cityId);
+  if (!city) throw new Error('Unknown city');
+  const types = await listVehicleTypes({ onlyActive: true });
+  const dk = Math.max(0, Number(distanceKm) || 0);
+  const baseFare = Number(city.baseFare ?? city.base_fare ?? 0);
+  const perKm = Number(city.perKm ?? city.per_km ?? 0);
+  const baseAmount = baseFare + perKm * dk;
+  const options = types.map((vt) => {
+    const mult = Number(vt.fareMultiplier ?? vt.fare_multiplier ?? 1) || 1;
+    return {
+      vehicleTypeId: vt.id,
+      name: vt.name || vt.code || vt.id,
+      fareMultiplier: mult,
+      amount: Math.round(baseAmount * mult)
+    };
+  });
+  return {
+    cityId: city.id,
+    distanceKm: dk,
+    options
   };
 }
 

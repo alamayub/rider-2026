@@ -939,14 +939,19 @@ export async function updateUserPasswordHash({ userId, passwordHash, actorUserId
 
 export async function findCityById(cityId) {
   if (env.dbClient === 'memory') {
-    return memory.cities.find((c) => String(c.id) === String(cityId) || String(c.code || '') === String(cityId)) || null;
+    const found =
+      memory.cities.find(
+        (c) => String(c.id) === String(cityId) || String(c.code || '') === String(cityId)
+      ) || null;
+    return found ? normalizeCityRow(found) : null;
   }
 
   const [rows] = await pool.query(
     'SELECT id, code, name, currency, base_fare AS baseFare, per_km AS perKm, support_number AS supportNumber, tax_percent AS taxPercent FROM cities WHERE id = ? OR code = ? LIMIT 1',
     [cityId, cityId]
   );
-  return rows[0] || null;
+  const row = rows[0];
+  return row ? normalizeCityRow(row) : null;
 }
 
 export async function listCities() {
@@ -3004,14 +3009,20 @@ export async function listConversationsForUser(userId) {
 
 export async function findFirstActiveAdminUser() {
   if (env.dbClient === 'memory') {
-    const admins = memory.users.filter((u) => u.role === 'admin' && u.status === 'active');
+    const admins = memory.users.filter(
+      (u) =>
+        u.role === 'admin' &&
+        u.status !== 'suspended' &&
+        u.status !== 'banned'
+    );
     admins.sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
     return admins[0] || null;
   }
   const [rows] = await pool.query(
     `SELECT id, phone, email, role, status, created_at AS createdAt
      FROM users
-     WHERE role = 'admin' AND status = 'active'
+     WHERE role = 'admin'
+       AND (status IS NULL OR status NOT IN ('suspended', 'banned'))
      ORDER BY id ASC
      LIMIT 1`
   );

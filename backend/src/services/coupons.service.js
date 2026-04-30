@@ -22,6 +22,36 @@ export async function getCoupons() {
   return listCoupons();
 }
 
+/** Active, in date window, and not exhausted (global usage limit). */
+export function couponIsCurrentlyUsable(coupon) {
+  if (!coupon || !coupon.isActive) return false;
+  const now = Date.now();
+  if (new Date(coupon.startsAt).getTime() > now || new Date(coupon.endsAt).getTime() < now) {
+    return false;
+  }
+  if (coupon.usageLimit > 0 && coupon.usedCount >= coupon.usageLimit) {
+    return false;
+  }
+  return true;
+}
+
+/** Rider-facing catalog: no admin-only fields beyond usage stats. */
+export async function listAvailableCouponsForRiders() {
+  const all = await listCoupons();
+  return all.filter(couponIsCurrentlyUsable).map((c) => ({
+    id: c.id,
+    code: c.code,
+    discountType: c.discountType,
+    discountValue: c.discountValue,
+    maxDiscount: c.maxDiscount,
+    minFare: c.minFare,
+    startsAt: c.startsAt,
+    endsAt: c.endsAt,
+    usageLimit: c.usageLimit,
+    usedCount: c.usedCount
+  }));
+}
+
 export async function updateCoupon(couponId, payload, actorUserId) {
   return updateCouponRecord(couponId, payload, actorUserId);
 }

@@ -1,4 +1,10 @@
-import { applyCouponToRide, createCoupon, getCoupons, validateCoupon } from '../services/coupons.service.js';
+import {
+  applyCouponToRide,
+  createCoupon,
+  getCoupons,
+  listAvailableCouponsForRiders,
+  validateCoupon
+} from '../services/coupons.service.js';
 
 export async function createCouponController(req, res) {
   try {
@@ -11,6 +17,10 @@ export async function createCouponController(req, res) {
 
 export async function listCouponsController(_req, res) {
   return res.json(await getCoupons());
+}
+
+export async function listAvailableCouponsController(_req, res) {
+  return res.json(await listAvailableCouponsForRiders());
 }
 
 export async function validateCouponController(req, res) {

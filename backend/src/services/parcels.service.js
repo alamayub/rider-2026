@@ -5,6 +5,7 @@ import {
   findVehicleTypeById,
   insertParcelEvent,
   listParcelsByUserRole,
+  listVehicleTypes,
   markParcelOtpVerified,
   updateParcelStatusRecord
 } from '../db/store.js';
@@ -27,16 +28,49 @@ export async function estimateParcelFare({ cityId, distanceKm, vehicleTypeId, we
     throw new Error('Vehicle type not found or inactive');
   }
 
-  const weightSurcharge = Math.max(0, Number(weightKg || 0) - 1) * 10;
-  const baseAmount = city.baseFare + city.perKm * Number(distanceKm) + weightSurcharge;
-  const amount = Math.round(baseAmount * Number(vehicleType.fareMultiplier));
+  const w = Number(weightKg || 0);
+  const dk = Math.max(0, Number(distanceKm) || 0);
+  const weightSurcharge = Math.max(0, w - 1) * 10;
+  const baseFare = Number(city.baseFare ?? city.base_fare ?? 0);
+  const perKm = Number(city.perKm ?? city.per_km ?? 0);
+  const baseAmount = baseFare + perKm * dk + weightSurcharge;
+  const mult = Number(vehicleType.fareMultiplier ?? vehicleType.fare_multiplier ?? 1) || 1;
+  const amount = Math.round(baseAmount * mult);
 
   return {
     cityId: city.id,
-    distanceKm: Number(distanceKm),
-    weightKg: Number(weightKg || 0),
+    distanceKm: dk,
+    weightKg: w,
     vehicleTypeId: vehicleType.id,
     amount
+  };
+}
+
+/** Parcel fare for every active vehicle type (same formula as [estimateParcelFare]). */
+export async function estimateParcelFareOptions({ cityId, distanceKm, weightKg }) {
+  const city = await findCityById(cityId);
+  if (!city) throw new Error('Unknown city');
+  const types = await listVehicleTypes({ onlyActive: true });
+  const dk = Math.max(0, Number(distanceKm) || 0);
+  const w = Number(weightKg || 0);
+  const weightSurcharge = Math.max(0, w - 1) * 10;
+  const baseFare = Number(city.baseFare ?? city.base_fare ?? 0);
+  const perKm = Number(city.perKm ?? city.per_km ?? 0);
+  const baseAmount = baseFare + perKm * dk + weightSurcharge;
+  const options = types.map((vt) => {
+    const mult = Number(vt.fareMultiplier ?? vt.fare_multiplier ?? 1) || 1;
+    return {
+      vehicleTypeId: vt.id,
+      name: vt.name || vt.code || vt.id,
+      fareMultiplier: mult,
+      amount: Math.round(baseAmount * mult)
+    };
+  });
+  return {
+    cityId: city.id,
+    distanceKm: dk,
+    weightKg: w,
+    options
   };
 }
 

@@ -1,14 +1,54 @@
 import 'package:dio/dio.dart';
 
 class DriverApi {
-  DriverApi({required this.baseUrl}) : _dio = Dio(BaseOptions(baseUrl: baseUrl));
+  DriverApi({required this.baseUrl}) : _dio = Dio(BaseOptions(baseUrl: baseUrl)) {
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onError: (DioException err, ErrorInterceptorHandler handler) {
+          _maybeNotifyUnauthorized(
+            err.requestOptions,
+            err.response?.statusCode,
+          );
+          return handler.next(err);
+        },
+      ),
+    );
+  }
 
   final String baseUrl;
+
+  /// Set by [SessionNotifier] so 401/403 on authenticated routes clears the session.
+  void Function()? onUnauthorized;
+
   final Dio _dio;
   String? _accessToken;
+  bool _unauthorizedNotified = false;
+
+  static bool _isPublicAuthPath(String path) {
+    final String p = path.endsWith('/') && path.length > 1
+        ? path.substring(0, path.length - 1)
+        : path;
+    return p == '/auth/signin' ||
+        p == '/auth/register' ||
+        p == '/auth/request-otp';
+  }
+
+  void _maybeNotifyUnauthorized(RequestOptions ro, int? statusCode) {
+    if (statusCode != 401 && statusCode != 403) return;
+    if (_isPublicAuthPath(ro.path)) return;
+    final Object? auth = ro.headers['Authorization'];
+    final String authStr = auth is String ? auth : '';
+    if (authStr.isEmpty) return;
+    if (_unauthorizedNotified) return;
+    _unauthorizedNotified = true;
+    onUnauthorized?.call();
+  }
 
   set accessToken(String? value) {
     _accessToken = value;
+    if (value != null && value.isNotEmpty) {
+      _unauthorizedNotified = false;
+    }
   }
 
   Options get _authOptions => Options(
