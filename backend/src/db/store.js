@@ -1,4 +1,4 @@
-import { readFile } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import mysql from 'mysql2/promise';
@@ -132,6 +132,79 @@ async function applySchemaFromSqlFile() {
     .filter(Boolean);
   for (const statement of statements) {
     await pool.query(statement);
+  }
+}
+
+/**
+ * Runs `sql/migrations/NNN_*.sql` once per version (tracked in `schema_migrations`).
+ * Incremental DDL belongs here and in `sql/schema.sql` (see `sql/migrations/README.md`).
+ */
+async function applyPendingSqlMigrations() {
+  if (env.dbClient === 'memory') {
+    return;
+  }
+
+  await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    version VARCHAR(191) NOT NULL PRIMARY KEY,
+    applied_at DATETIME NOT NULL,
+    KEY idx_schema_migrations_applied_at (applied_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  const migrationsDir = path.resolve(__dirname, '../../sql/migrations');
+  let files;
+  try {
+    files = (await readdir(migrationsDir))
+      .filter((name) => /^\d{3}_.*\.sql$/i.test(name))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return;
+    }
+    throw err;
+  }
+
+  for (const file of files) {
+    const version = file.replace(/\.sql$/i, '');
+    const [appliedRows] = await pool.query(
+      'SELECT 1 AS ok FROM schema_migrations WHERE version = ? LIMIT 1',
+      [version]
+    );
+    if (Array.isArray(appliedRows) && appliedRows.length > 0) {
+      continue;
+    }
+
+    const fullPath = path.join(migrationsDir, file);
+    let body = await readFile(fullPath, 'utf8');
+    body = body
+      .split('\n')
+      .filter((line) => !/^\s*--/.test(line))
+      .join('\n')
+      .trim();
+    if (!body) {
+      continue;
+    }
+
+    const statements = body
+      .split(/;\s*\n/g)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    for (const statement of statements) {
+      try {
+        await pool.query(statement);
+      } catch (err) {
+        const code = err?.code;
+        // Make additive schema migrations safe on already-updated databases.
+        if (code === 'ER_DUP_FIELDNAME' || code === 'ER_DUP_KEYNAME' || code === 'ER_DUP_ENTRY') {
+          logger.info('Skipping already-applied migration statement', { migration: version, code });
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    await pool.query('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)', [version, now()]);
+    logger.info('Applied SQL migration', { migration: version });
   }
 }
 
@@ -278,6 +351,7 @@ function normalizeRide(row) {
     rideStartOtp: row.ride_start_otp || null,
     rideStartOtpVerifiedAt: row.ride_start_otp_verified_at || null,
     status: row.status,
+    cancellationReason: row.cancellation_reason ?? row.cancellationReason ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -348,6 +422,8 @@ async function migrateMySql() {
   };
 
   await applySchemaFromSqlFile();
+
+  await applyPendingSqlMigrations();
 
   await addColumnIfMissing('payout_ledger', 'parcel_id', 'BIGINT UNSIGNED NULL');
   const payoutPaymentIdNullable = async () => {
@@ -484,7 +560,7 @@ export async function findUserByPhoneRole(phone, role) {
 
   for (const p of variants) {
     const [rows] = await pool.query(
-      `SELECT id, phone, email, password_hash AS passwordHash, auth_otp AS authOtp, auth_otp_expires_at AS authOtpExpiresAt,
+      `SELECT id, phone, email, full_name AS fullName, password_hash AS passwordHash, auth_otp AS authOtp, auth_otp_expires_at AS authOtpExpiresAt,
             auth_otp_last_sent_at AS authOtpLastSentAt, auth_otp_window_started_at AS authOtpWindowStartedAt, auth_otp_window_count AS authOtpWindowCount,
             failed_otp_count AS failedOtpCount, otp_locked_until AS otpLockedUntil,
             failed_signin_count AS failedSigninCount, signin_locked_until AS signinLockedUntil,
@@ -496,7 +572,7 @@ export async function findUserByPhoneRole(phone, role) {
   }
 
   const [legacyRows] = await pool.query(
-    `SELECT id, phone, email, password_hash AS passwordHash, auth_otp AS authOtp, auth_otp_expires_at AS authOtpExpiresAt,
+    `SELECT id, phone, email, full_name AS fullName, password_hash AS passwordHash, auth_otp AS authOtp, auth_otp_expires_at AS authOtpExpiresAt,
             auth_otp_last_sent_at AS authOtpLastSentAt, auth_otp_window_started_at AS authOtpWindowStartedAt, auth_otp_window_count AS authOtpWindowCount,
             failed_otp_count AS failedOtpCount, otp_locked_until AS otpLockedUntil,
             failed_signin_count AS failedSigninCount, signin_locked_until AS signinLockedUntil,
@@ -507,7 +583,7 @@ export async function findUserByPhoneRole(phone, role) {
   return legacyRows.find((row) => normalizeUserPhone(row.phone) === key) || null;
 }
 
-export async function createUser({ phone, email, role, passwordHash = null }) {
+export async function createUser({ phone, email, fullName = null, role, passwordHash = null }) {
   const phoneNorm = normalizeUserPhone(phone);
   if (!phoneNorm) {
     throw new Error('phone is required');
@@ -517,6 +593,7 @@ export async function createUser({ phone, email, role, passwordHash = null }) {
     id: createId(),
     phone: phoneNorm,
     email: email || null,
+    fullName: fullName || null,
     passwordHash,
     authOtp: null,
     authOtpExpiresAt: null,
@@ -542,13 +619,14 @@ export async function createUser({ phone, email, role, passwordHash = null }) {
 
   await pool.query(
     `INSERT INTO users (
-      id, phone, email, password_hash, auth_otp, auth_otp_expires_at, auth_otp_last_sent_at, auth_otp_window_started_at, auth_otp_window_count,
+      id, phone, email, full_name, password_hash, auth_otp, auth_otp_expires_at, auth_otp_last_sent_at, auth_otp_window_started_at, auth_otp_window_count,
       failed_otp_count, otp_locked_until, failed_signin_count, signin_locked_until, role, status, created_at, updated_at, created_by, updated_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
     user.id,
     user.phone,
     user.email,
+    user.fullName,
     user.passwordHash,
     user.authOtp,
     user.authOtpExpiresAt,
@@ -577,7 +655,7 @@ export async function findUserById(userId) {
   }
 
   const [rows] = await pool.query(
-    `SELECT id, phone, email, password_hash AS passwordHash, auth_otp AS authOtp, auth_otp_expires_at AS authOtpExpiresAt,
+    `SELECT id, phone, email, full_name AS fullName, password_hash AS passwordHash, auth_otp AS authOtp, auth_otp_expires_at AS authOtpExpiresAt,
             auth_otp_last_sent_at AS authOtpLastSentAt, auth_otp_window_started_at AS authOtpWindowStartedAt, auth_otp_window_count AS authOtpWindowCount,
             failed_otp_count AS failedOtpCount, otp_locked_until AS otpLockedUntil,
             failed_signin_count AS failedSigninCount, signin_locked_until AS signinLockedUntil,
@@ -777,6 +855,84 @@ export async function updateUserStatus(userId, status) {
   if (after) {
     await createAuditLogRecord({ entityType: 'user', entityId: userId, action: 'update', actorUserId: 'system', beforeState: before, afterState: after });
     await refreshPlatformCounters();
+  }
+  return after;
+}
+
+export async function updateUserProfile({ userId, email, fullName, actorUserId }) {
+  const actorId = actorOrSystem(actorUserId);
+  if (env.dbClient === 'memory') {
+    const user = memory.users.find((u) => u.id === userId);
+    if (!user) return null;
+    const before = { ...user };
+    user.email = email ?? null;
+    user.fullName = fullName ?? null;
+    user.updatedAt = now();
+    user.updatedBy = actorId;
+    memory.auditLogs.push({
+      id: createId(),
+      entityType: 'user',
+      entityId: userId,
+      action: 'update',
+      actorUserId: actorId,
+      beforeState: before,
+      afterState: { ...user },
+      createdAt: now()
+    });
+    return user;
+  }
+
+  const before = await findUserById(userId);
+  if (!before) return null;
+  const updatedAt = now();
+  await pool.query('UPDATE users SET email = ?, full_name = ?, updated_at = ?, updated_by = ? WHERE id = ?', [
+    email ?? null,
+    fullName ?? null,
+    updatedAt,
+    actorId,
+    userId
+  ]);
+  const after = await findUserById(userId);
+  if (after) {
+    await createAuditLogRecord({ entityType: 'user', entityId: userId, action: 'update', actorUserId: actorId, beforeState: before, afterState: after });
+  }
+  return after;
+}
+
+export async function updateUserPasswordHash({ userId, passwordHash, actorUserId }) {
+  const actorId = actorOrSystem(actorUserId);
+  if (env.dbClient === 'memory') {
+    const user = memory.users.find((u) => u.id === userId);
+    if (!user) return null;
+    const before = { ...user };
+    user.passwordHash = passwordHash;
+    user.updatedAt = now();
+    user.updatedBy = actorId;
+    memory.auditLogs.push({
+      id: createId(),
+      entityType: 'user',
+      entityId: userId,
+      action: 'update',
+      actorUserId: actorId,
+      beforeState: before,
+      afterState: { ...user },
+      createdAt: now()
+    });
+    return user;
+  }
+
+  const before = await findUserById(userId);
+  if (!before) return null;
+  const updatedAt = now();
+  await pool.query('UPDATE users SET password_hash = ?, updated_at = ?, updated_by = ? WHERE id = ?', [
+    passwordHash,
+    updatedAt,
+    actorId,
+    userId
+  ]);
+  const after = await findUserById(userId);
+  if (after) {
+    await createAuditLogRecord({ entityType: 'user', entityId: userId, action: 'update', actorUserId: actorId, beforeState: before, afterState: after });
   }
   return after;
 }
@@ -1387,6 +1543,7 @@ export async function createRideRecord({
     rideStartOtp: rideStartOtp || '000000',
     rideStartOtpVerifiedAt: null,
     status,
+    cancellationReason: null,
     createdAt: ts,
     updatedAt: ts,
     createdBy: actorId,
@@ -1455,14 +1612,34 @@ export async function findRideById(rideId) {
   }
 
   const [rows] = await pool.query(
-    'SELECT id, rider_id, driver_id, city_id, pickup, drop_location, fare, vehicle_type_id, ride_start_otp, ride_start_otp_verified_at, status, created_at, updated_at FROM rides WHERE id = ? LIMIT 1',
+    'SELECT id, rider_id, driver_id, city_id, pickup, drop_location, fare, vehicle_type_id, ride_start_otp, ride_start_otp_verified_at, status, cancellation_reason, created_at, updated_at FROM rides WHERE id = ? LIMIT 1',
     [rideId]
   );
 
   return normalizeRide(rows[0]);
 }
 
-export async function updateRideStatusRecord({ rideId, status, actorUserId }) {
+/** Latest ride for this rider that is not completed or cancelled (at most one should exist). */
+export async function findActiveRideForRider(riderId) {
+  const terminal = new Set(['completed', 'cancelled']);
+  if (env.dbClient === 'memory') {
+    const list = memory.rides.filter((r) => r.riderId === riderId && !terminal.has(r.status));
+    list.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    return list[0] || null;
+  }
+
+  const [rows] = await pool.query(
+    `SELECT id, rider_id, driver_id, city_id, pickup, drop_location, fare, vehicle_type_id, ride_start_otp, ride_start_otp_verified_at, status, cancellation_reason, created_at, updated_at
+     FROM rides
+     WHERE rider_id = ? AND status NOT IN ('completed','cancelled')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [riderId]
+  );
+  return normalizeRide(rows[0]);
+}
+
+export async function updateRideStatusRecord({ rideId, status, actorUserId, cancellationReason = null }) {
   const updatedAt = now();
   const actorId = actorOrSystem(actorUserId);
 
@@ -1471,13 +1648,23 @@ export async function updateRideStatusRecord({ rideId, status, actorUserId }) {
     if (!ride) return null;
     const before = { ...ride };
     ride.status = status;
+    if (status === 'cancelled') {
+      ride.cancellationReason = cancellationReason || null;
+    }
     ride.updatedAt = updatedAt;
     await recordRideStatusTransitionAnalytics(before, ride);
     return ride;
   }
 
   const before = await findRideById(rideId);
-  await pool.query('UPDATE rides SET status = ?, updated_at = ?, updated_by = ? WHERE id = ?', [status, updatedAt, actorId, rideId]);
+  if (status === 'cancelled') {
+    await pool.query(
+      'UPDATE rides SET status = ?, cancellation_reason = ?, updated_at = ?, updated_by = ? WHERE id = ?',
+      [status, cancellationReason || null, updatedAt, actorId, rideId]
+    );
+  } else {
+    await pool.query('UPDATE rides SET status = ?, updated_at = ?, updated_by = ? WHERE id = ?', [status, updatedAt, actorId, rideId]);
+  }
   const after = await findRideById(rideId);
   if (after) {
     await createAuditLogRecord({ entityType: 'ride', entityId: rideId, action: 'update', actorUserId: actorId, beforeState: before, afterState: after });
@@ -1516,7 +1703,7 @@ export async function listRidesByUserRole(userId, role) {
   }
 
   let sql =
-    'SELECT id, rider_id, driver_id, city_id, pickup, drop_location, fare, vehicle_type_id, ride_start_otp, ride_start_otp_verified_at, status, created_at, updated_at FROM rides';
+    'SELECT id, rider_id, driver_id, city_id, pickup, drop_location, fare, vehicle_type_id, ride_start_otp, ride_start_otp_verified_at, status, cancellation_reason, created_at, updated_at FROM rides';
   const params = [];
 
   if (role === 'rider') {
@@ -1538,7 +1725,7 @@ export async function listActiveRides() {
   }
 
   const [rows] = await pool.query(
-    "SELECT id, rider_id, driver_id, city_id, pickup, drop_location, fare, vehicle_type_id, ride_start_otp, ride_start_otp_verified_at, status, created_at, updated_at FROM rides WHERE status NOT IN ('completed', 'cancelled')"
+    "SELECT id, rider_id, driver_id, city_id, pickup, drop_location, fare, vehicle_type_id, ride_start_otp, ride_start_otp_verified_at, status, cancellation_reason, created_at, updated_at FROM rides WHERE status NOT IN ('completed', 'cancelled')"
   );
 
   return rows.map(normalizeRide);

@@ -165,7 +165,7 @@ class SessionNotifier extends StateNotifier<RiderSession?> {
   }
 }
 
-const int _riderHomeTabMax = 5;
+const int _riderHomeTabMax = 6;
 
 class RiderHomeTabNotifier extends StateNotifier<int> {
   RiderHomeTabNotifier(this._prefs)

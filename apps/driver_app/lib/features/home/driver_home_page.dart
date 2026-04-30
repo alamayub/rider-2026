@@ -262,6 +262,7 @@ class _RidesTab extends HookConsumerWidget {
     final rideIdController = useTextEditingController();
     final otpController = useTextEditingController();
     final statusController = useTextEditingController(text: 'in_progress');
+    final cancelReasonController = useTextEditingController();
     final latController = useTextEditingController(text: '27.7172');
     final lngController = useTextEditingController(text: '85.3240');
     final cityIdController = useTextEditingController(text: 'city-kathmandu');
@@ -292,11 +293,19 @@ class _RidesTab extends HookConsumerWidget {
         lastError.value = 'Enter the 6-digit code the rider gives you.';
         return;
       }
+      if (status == 'cancelled' && cancelReasonController.text.trim().length < 3) {
+        lastError.value =
+            'Cancellation reason is required (at least 3 characters) when status is cancelled.';
+        return;
+      }
       try {
         lastResult.value = await api.updateRideStatus(
           rideId: rideId,
           status: status,
           otp: otp,
+          cancellationReason: status == 'cancelled'
+              ? cancelReasonController.text.trim()
+              : null,
         );
         refresh.value++;
       } catch (e) {
@@ -363,6 +372,15 @@ class _RidesTab extends HookConsumerWidget {
         const Text('Ride status (all transitions)', style: TextStyle(fontWeight: FontWeight.bold)),
         TextField(controller: rideIdController, decoration: const InputDecoration(labelText: 'Ride ID')),
         TextField(controller: statusController, decoration: const InputDecoration(labelText: 'Status (accepted/in_progress/completed/...)')),
+        TextField(
+          controller: cancelReasonController,
+          decoration: const InputDecoration(
+            labelText: 'Cancellation reason (required if status is cancelled)',
+            hintText: 'At least 3 characters',
+          ),
+          minLines: 1,
+          maxLines: 3,
+        ),
         TextField(
           controller: otpController,
           keyboardType: TextInputType.number,

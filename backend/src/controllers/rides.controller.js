@@ -23,13 +23,23 @@ export async function createRideController(req, res) {
     const ride = await createRide({ ...req.body, riderId: req.user.sub });
     return res.status(201).json(toRideResponseForUser(ride, req.user.sub, req.user.role));
   } catch (error) {
-    return res.status(400).json({ error: error.message });
+    const msg = error?.message || String(error);
+    if (/active ride/i.test(msg)) {
+      return res.status(409).json({ error: msg, code: 'ACTIVE_RIDE_EXISTS' });
+    }
+    return res.status(400).json({ error: msg });
   }
 }
 
 export async function updateRideStatusController(req, res) {
   try {
-    const ride = await updateRideStatus({ rideId: req.params.rideId, status: req.body.status, otp: req.body.otp, actorUserId: req.user.sub });
+    const ride = await updateRideStatus({
+      rideId: req.params.rideId,
+      status: req.body.status,
+      otp: req.body.otp,
+      cancellationReason: req.body.cancellationReason,
+      actorUserId: req.user.sub
+    });
     return res.json(toRideResponseForUser(ride, req.user.sub, req.user.role));
   } catch (error) {
     return res.status(400).json({ error: error.message });

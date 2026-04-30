@@ -91,10 +91,13 @@ class DriverApi {
     required String rideId,
     required String status,
     String? otp,
+    String? cancellationReason,
   }) async =>
       _map('/rides/$rideId/status', <String, dynamic>{
         'status': status,
         if (otp != null && otp.isNotEmpty) 'otp': otp,
+        if (cancellationReason != null && cancellationReason.trim().isNotEmpty)
+          'cancellationReason': cancellationReason.trim(),
       });
 
   Future<List<dynamic>> listVehicleTypes() async => _list('/rides/vehicle-types');

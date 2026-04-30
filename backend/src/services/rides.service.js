@@ -8,6 +8,7 @@ import {
   findVehicleTypeById,
   incrementCouponUsage,
   insertRideEvent,
+  findActiveRideForRider,
   listCities,
   listVehicleTypes,
   markRideStartOtpVerified,
@@ -121,6 +122,11 @@ export async function estimateFare({ cityId, distanceKm, vehicleTypeId }) {
 }
 
 export async function createRide({ riderId, cityId, pickup, drop, distanceKm, couponCode, vehicleTypeId }) {
+  const active = await findActiveRideForRider(riderId);
+  if (active) {
+    throw new Error('You already have an active ride. Cancel it or wait until it finishes before requesting another.');
+  }
+
   const estimate = await estimateFare({ cityId, distanceKm, vehicleTypeId });
   const driverId = await findNearestAvailableDriver(estimate.cityId, pickup, estimate.vehicleTypeId);
   let finalFare = estimate.amount;
@@ -186,9 +192,16 @@ export async function createRide({ riderId, cityId, pickup, drop, distanceKm, co
   return ride;
 }
 
-export async function updateRideStatus({ rideId, status, actorUserId, otp }) {
+export async function updateRideStatus({ rideId, status, actorUserId, otp, cancellationReason }) {
   const existing = await findRideById(rideId);
   if (!existing) throw new Error('Ride not found');
+
+  if (status === 'cancelled') {
+    const reason = String(cancellationReason ?? '').trim();
+    if (reason.length < 3) {
+      throw new Error('Cancellation reason is required (at least 3 characters).');
+    }
+  }
 
   if (status === 'in_progress') {
     if (!otp) throw new Error('Ride start OTP is required');
@@ -196,10 +209,25 @@ export async function updateRideStatus({ rideId, status, actorUserId, otp }) {
     await markRideStartOtpVerified({ rideId, actorUserId });
   }
 
-  const ride = await updateRideStatusRecord({ rideId, status, actorUserId });
+  const trimmedCancel =
+    status === 'cancelled' ? String(cancellationReason ?? '').trim() : null;
+  const ride = await updateRideStatusRecord({
+    rideId,
+    status,
+    actorUserId,
+    cancellationReason: trimmedCancel
+  });
   if (!ride) throw new Error('Ride not found');
 
-  await insertRideEvent({ rideId: ride.id, type: 'status_changed', payload: { status }, actorUserId });
+  await insertRideEvent({
+    rideId: ride.id,
+    type: 'status_changed',
+    payload:
+      status === 'cancelled'
+        ? { status, cancellationReason: trimmedCancel }
+        : { status },
+    actorUserId
+  });
   if (status === 'completed') {
     await ensureDriverPayoutsAfterRideCompleted({ rideId: ride.id, actorUserId });
   }

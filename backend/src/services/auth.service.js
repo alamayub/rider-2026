@@ -6,7 +6,10 @@ import {
   clearUserAuthOtp,
   createUser,
   findUserByPhoneRole,
+  findUserById,
   setUserAuthOtp,
+  updateUserPasswordHash,
+  updateUserProfile,
   updateUserOtpGuard,
   updateUserOtpWindow,
   updateUserSignInGuard
@@ -72,6 +75,19 @@ function buildTokens(user) {
   });
 
   return { accessToken, refreshToken };
+}
+
+function toPublicUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    phone: user.phone,
+    email: user.email || null,
+    fullName: user.fullName || null,
+    role: user.role,
+    status: user.status,
+    createdAt: user.createdAt
+  };
 }
 
 export async function requestSignInOtp({ phone, email, role, sourceIp }) {
@@ -224,4 +240,63 @@ export async function signIn({ phone, email, role, password, otp, sourceIp }) {
   user = await updateUserSignInGuard({ userId: user.id, failedSigninCount: 0, signinLockedUntil: null, actorUserId: user.id });
   const tokens = buildTokens(user);
   return { user, ...tokens };
+}
+
+export async function getMyProfile({ userId }) {
+  const user = await findUserById(userId);
+  if (!user) {
+    throw new Error('User not found');
+  }
+  return toPublicUser(user);
+}
+
+export async function updateMyProfile({ userId, email, fullName }) {
+  const nextEmail = email == null ? null : String(email).trim();
+  const nextFullName = fullName == null ? null : String(fullName).trim();
+  if (nextEmail != null && nextEmail.length > 0 && nextEmail.length > 190) {
+    throw new Error('Email is too long');
+  }
+  if (nextFullName != null && nextFullName.length > 160) {
+    throw new Error('Full name is too long');
+  }
+
+  const updated = await updateUserProfile({
+    userId,
+    email: nextEmail && nextEmail.length > 0 ? nextEmail : null,
+    fullName: nextFullName && nextFullName.length > 0 ? nextFullName : null,
+    actorUserId: userId
+  });
+  if (!updated) {
+    throw new Error('User not found');
+  }
+  return toPublicUser(updated);
+}
+
+export async function changePassword({ userId, currentPassword, newPassword }) {
+  const user = await findUserById(userId);
+  if (!user) throw new Error('User not found');
+  if (!currentPassword || !newPassword) {
+    throw new Error('currentPassword and newPassword are required');
+  }
+  if (!user.passwordHash) {
+    throw new Error('Password login is not set for this account');
+  }
+  if (!verifyPassword(currentPassword, user.passwordHash)) {
+    throw new Error('Current password is incorrect');
+  }
+  if (!validatePasswordStrength(newPassword)) {
+    throw new Error(
+      'Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character'
+    );
+  }
+  if (verifyPassword(newPassword, user.passwordHash)) {
+    throw new Error('New password must be different from current password');
+  }
+
+  await updateUserPasswordHash({
+    userId,
+    passwordHash: hashPassword(newPassword),
+    actorUserId: userId
+  });
+  return { ok: true };
 }

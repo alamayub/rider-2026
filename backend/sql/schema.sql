@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   phone VARCHAR(32) NOT NULL,
   email VARCHAR(190) NULL,
+  full_name VARCHAR(160) NULL,
   password_hash VARCHAR(255) NULL,
   auth_otp VARCHAR(8) NULL,
   auth_otp_expires_at DATETIME NULL,
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS rides (
   ride_start_otp VARCHAR(8) NOT NULL,
   ride_start_otp_verified_at DATETIME NULL,
   status VARCHAR(24) NOT NULL,
+  cancellation_reason VARCHAR(500) NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
   created_by VARCHAR(36) NOT NULL,
@@ -543,3 +545,9 @@ CREATE TABLE IF NOT EXISTS driver_kyc_records (
   UNIQUE KEY uniq_driver_kyc (driver_id),
   KEY idx_driver_kyc_status (status)
 );
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version VARCHAR(191) NOT NULL PRIMARY KEY,
+  applied_at DATETIME NOT NULL,
+  KEY idx_schema_migrations_applied_at (applied_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -22,7 +24,7 @@ Future<void> main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  await LocalNotificationsService.initialize();
+  // Must be registered exactly once, before runApp (not from a widget).
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   runApp(
     ProviderScope(
@@ -32,4 +34,6 @@ Future<void> main() async {
       child: const RiderApp(),
     ),
   );
+  // Keep startup frame light; initialize plugin after first app frame.
+  unawaited(LocalNotificationsService.initialize());
 }
