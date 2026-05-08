@@ -3,10 +3,10 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'app/driver_app.dart';
-import 'core/local_notifications.dart';
-import 'core/providers.dart';
-import 'firebase_options.dart';
+import 'config/firebase_options.dart';
+import 'providers/providers.dart';
+import 'services/local_notifications.dart';
+import 'widgets/driver_app.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {

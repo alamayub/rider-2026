@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:rider_app/app/rider_app.dart';
-import 'package:rider_app/core/providers.dart';
+import 'package:rider_app/providers/providers.dart';
+import 'package:rider_app/widgets/rider_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {

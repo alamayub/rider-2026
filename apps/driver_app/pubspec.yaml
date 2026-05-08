@@ -17,6 +17,8 @@ dependencies:
   firebase_messaging: ^16.2.0
   flutter_local_notifications: ^21.0.0
   shared_preferences: ^2.5.3
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
 
 dev_dependencies:
   flutter_test:
